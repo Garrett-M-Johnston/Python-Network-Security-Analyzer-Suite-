@@ -1,0 +1,17 @@
+{
+    "suspicious_tlds": [".xyz", ".top", ".work", ".live"],
+    "suspicious_keywords": [
+        "urgent", "account", "suspended", "verify", "login",
+        "security", "important", "payment", "confirm", "update"
+    ],
+    "url_blacklist": [
+        "bit.ly", "tinyurl.com", "goo.gl", "t.co",
+        "tiny.cc", "ow.ly", "is.gd"
+    ],
+    "max_risk_score": 10,
+    "risk_thresholds": {
+        "low": 3,
+        "medium": 6,
+        "high": 8
+    }
+}
