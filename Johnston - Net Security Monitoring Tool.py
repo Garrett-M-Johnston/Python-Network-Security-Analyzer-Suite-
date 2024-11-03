@@ -29,10 +29,9 @@ class SecuritySuiteApp:
         self.root.title("Advanced Security Analysis Suite")
         self.root.geometry("1000x700")
         
-        # Set system color scheme to dark
+        # Color Scheme
         self.root.configure(bg='#121212')
         
-        # Initialize variables
         self.setup_variables()
         self.setup_styles()
         self.create_notebook()
@@ -77,7 +76,7 @@ class SecuritySuiteApp:
                 'signin', 'security', 'password', 'credential'
             },
             'suspicious_patterns': [
-                r'[0-9]+[a-zA-Z]+[0-9]+\.', # Mix of numbers and letters in domain
+                r'[0-9]+[a-zA-Z]+[0-9]+\.', # Mixed numbers and letters in domain
                 r'[a-zA-Z]{25,}\.', # Very long domain names
                 r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', # IP addresses
                 r'bit\.ly|goo\.gl|tinyurl\.com|t\.co', # URL shorteners
@@ -305,7 +304,7 @@ class SecuritySuiteApp:
         ).pack(pady=10)
         
         # Results display
-        self.url_output = self.create_output_display(url_frame)
+        self.url_output = self.create_output_display(url_frame, state='disabled')
 
     def analyze_urls(self):
         """Analyze URLs for potential security threats"""
@@ -415,500 +414,6 @@ class SecuritySuiteApp:
         network_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
         self.notebook.add(network_frame, text='Network Monitor')
         
-        # Placeholder for future implementation
-        ttk.Label(network_frame,
-                 text="Network Traffic Monitoring (Coming Soon)\n\nFeatures to include:\n• Real-time traffic monitoring\n• Bandwidth analysis\n• Connection logging\n• Protocol analysis\n• Anomaly detection",
-                 font=self.fonts['text'],
-                 foreground=self.colors['text'],
-                 style='Custom.TLabel').pack(pady=20)
-
-    def create_password_analyzer_tab(self):
-        """Create password strength analyzer interface"""
-        password_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
-        self.notebook.add(password_frame, text='Password Analyzer')
-        
-        # Placeholder for future implementation
-        ttk.Label(password_frame,
-                 text="Password Strength Analyzer (Coming Soon)\n\nFeatures to include:\n• Password strength scoring\n• Common pattern detection\n• Dictionary attack vulnerability\n• Hash identifier\n• Password generation",
-                 font=self.fonts['text'],
-                 foreground=self.colors['text'],
-                 style='Custom.TLabel').pack(pady=20)
-    def create_email_analyzer_tab(self):
-        """Create email analyzer interface"""
-        email_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
-        self.notebook.add(email_frame, text='Email Analyzer')
-        
-        # Instructions
-        instructions = """Paste email content below for phishing analysis.
-        The analyzer will check for:
-        • Suspicious sender patterns
-        • Urgency indicators
-        • Sensitive information requests
-        • URL manipulation
-        • Domain spoofing
-        • Time pressure tactics"""
-        
-        ttk.Label(email_frame, 
-                 text=instructions,
-                 font=self.fonts['text'],
-                 foreground=self.colors['text'],
-                 style='Custom.TLabel',
-                 justify='left').pack(pady=5, padx=10)
-        
-        # Email input
-        self.email_input = self.create_output_display(email_frame)
-        self.email_input.configure(height=10)
-        
-        # Analysis button
-        ttk.Button(
-            email_frame,
-            text="Analyze Email",
-            command=self.analyze_email,
-            style='Custom.TButton'
-        ).pack(pady=10)
-        
-        # Results display
-        self.email_output = self.create_output_display(email_frame)
-    def analyze_email(self):
-        """Analyze email content for potential phishing indicators"""
-        email_content = self.email_input.get("1.0", tk.END).strip()
-        
-        if not email_content:
-            messagebox.showerror("Error", "Please enter email content to analyze")
-            return
-            
-        self.email_output.delete("1.0", tk.END)
-        
-        # Parse email content
-        try:
-            msg = email.message_from_string(email_content)
-        except Exception as e:
-            self.email_output.insert(tk.END, "Error parsing email content\n")
-            return
-            
-        # Initialize analysis results
-        analysis_results = {
-            'urgency_count': 0,
-            'sensitive_count': 0,
-            'suspicious_urls': [],
-            'spoofed_domains': [],
-            'risk_score': 0
-        }
-        
-        # Analyze headers
-        self._analyze_headers(msg, analysis_results)
-        
-        # Analyze body content
-        self._analyze_body(msg, analysis_results)
-        
-        # Calculate risk score (0-100)
-        risk_score = self._calculate_risk_score(analysis_results)
-        
-        # Display results
-        self._display_analysis_results(analysis_results, risk_score)
-
-    def _analyze_headers(self, msg: Message, results: Dict):
-        from_header = msg.get('from', '')
-        if from_header:
-            domain = from_header.split('@')[-1].strip('>')
-            # SPF/DKIM check example
-            if 'spf=fail' in msg.get('Received-SPF', '') or 'dkim=fail' in msg.get('Authentication-Results', ''):
-                results['risk_score'] += 20
-                results['spoofed_domains'].append(domain)
-        
-        # Check reply-to mismatch
-        reply_to = msg.get('reply-to', '')
-        if reply_to and from_header and '@' in reply_to and '@' in from_header:
-            reply_domain = reply_to.split('@')[-1].strip('>')
-            from_domain = from_header.split('@')[-1].strip('>')
-            if reply_domain != from_domain:
-                results['risk_score'] += 20
-
-    def _analyze_body(self, msg: Message, results: Dict):
-        """Analyze email body for suspicious content"""
-        # Get email body content
-        if msg.is_multipart():
-            body = ''
-            for part in msg.walk():
-                # Check if it's text/plain or text/html part
-                if part.get_content_type() == "text/plain":
-                    body += part.get_payload(decode=True).decode()
-                elif part.get_content_type() == "text/html":
-                    html_content = part.get_payload(decode=True).decode()
-                    body += html_content
-        else:
-            body = msg.get_payload(decode=True).decode() if msg.get_payload() else ''
-        
-        # Parse HTML with BeautifulSoup to extract all links
-        soup = BeautifulSoup(body, 'html.parser')
-        all_links = [a['href'] for a in soup.find_all('a', href=True)]
-
-        # Analyze all found links for suspicious patterns
-        for url in all_links:
-            try:
-                parsed = urllib.parse.urlparse(url)
-                if self._is_suspicious_url(parsed):
-                    results['suspicious_urls'].append(url)
-            except Exception:
-                continue
-
-        # Check for urgency indicators
-        for word in self.phishing_indicators['urgency_words']:
-            if word.lower() in body.lower():
-                results['urgency_count'] += 1
-        
-        # Check for sensitive information requests
-        for word in self.phishing_indicators['sensitive_words']:
-            if word.lower() in body.lower():
-                results['sensitive_count'] += 1
-        
-        # Sentiment analysis to detect urgency or fear-inducing language
-        blob = TextBlob(body)
-        sentiment = blob.sentiment.polarity
-        if sentiment < -0.3:  # Threshold for detecting negative sentiment
-            results['urgency_count'] += 1  # Increase urgency count if aggressive language detected
-        
-        # Combine HTML and plain text URL analysis
-        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', body)
-        urls += all_links  # Include all HTML links
-        urls = list(set(urls))  # Remove duplicates
-        
-        # Analyze all URLs for suspicious indicators
-        for url in urls:
-            try:
-                parsed = urllib.parse.urlparse(url)
-                if self._is_suspicious_url(parsed):
-                    results['suspicious_urls'].append(url)
-            except Exception:
-                continue
-
-    def _is_suspicious_url(self, parsed_url) -> bool:
-        """Check if a URL has suspicious characteristics"""
-        suspicious_indicators = [
-            'login', 'signin', 'account', 'verify', 'secure', 'update',
-            'confirm', 'password', 'banking'
-        ]
-        
-        domain = parsed_url.netloc.lower()
-        path = parsed_url.path.lower()
-        
-        # Check for IP-based URLs
-        if re.match(r'\d+\.\d+\.\d+\.\d+', domain):
-            return True
-            
-        # Check for suspicious keywords in domain or path
-        for indicator in suspicious_indicators:
-            if indicator in domain or indicator in path:
-                return True
-                
-        # Check for domain spoofing patterns
-        for legitimate in self.phishing_indicators['common_spoofed_domains']:
-            if legitimate in domain and not domain.endswith(('.com', '.org', '.net')):
-                return True
-                
-        return False
-
-    def _calculate_risk_score(self, results: Dict) -> int:
-        """Calculate overall phishing risk score"""
-        score = 0
-        
-        # Add points for urgency indicators
-        score += min(results['urgency_count'] * 10, 30)
-        
-        # Add points for sensitive information requests
-        score += min(results['sensitive_count'] * 15, 30)
-        
-        # Add points for suspicious URLs
-        score += min(len(results['suspicious_urls']) * 20, 30)
-        
-        # Add points for spoofed domains
-        score += min(len(results['spoofed_domains']) * 25, 40)
-        
-        return min(score, 100)
-
-    def _display_analysis_results(self, results: Dict, risk_score: int):
-        """Display analysis results in the output text widget with detailed reasons for suspicion"""
-        self.email_output.delete("1.0", tk.END)
-        
-        # Display risk score with color coding
-        if risk_score < 30:
-            risk_color = self.colors['success']
-        elif risk_score < 70:
-            risk_color = self.colors['warning']
-        else:
-            risk_color = self.colors['danger']
-            
-        self.email_output.insert(tk.END, f"Risk Score: {risk_score}/100\n", f"risk_{risk_color}")
-        self.email_output.insert(tk.END, "\n")
-
-        # Display detailed findings with specific reasons
-        if results['urgency_count'] > 0:
-            self.email_output.insert(tk.END, f"⚠ Found {results['urgency_count']} urgency indicators:\n", "warning")
-            self.email_output.insert(tk.END, "These terms often attempt to rush or pressure the recipient into quick actions, such as ‘immediate response,’ ‘urgent,’ or ‘deadline approaching.’\n\n")
-
-        if results['sensitive_count'] > 0:
-            self.email_output.insert(tk.END, f"⚠ Found {results['sensitive_count']} requests for sensitive information:\n", "warning")
-            self.email_output.insert(tk.END, "Terms suggesting requests for personal or sensitive data, like ‘password,’ ‘account,’ or ‘verification,’ indicate potential phishing attempts aiming to collect confidential information.\n\n")
-
-        if results['suspicious_urls']:
-            self.email_output.insert(tk.END, "\nSuspicious URLs detected:\n", "warning")
-            for url in results['suspicious_urls']:
-                reasons = []
-                parsed = urllib.parse.urlparse(url)
-                if re.match(r'\d+\.\d+\.\d+\.\d+', parsed.netloc):
-                    reasons.append("IP-based URL")
-                if any(keyword in parsed.path.lower() for keyword in ["login", "verify", "account", "confirm"]):
-                    reasons.append("keyword suggesting phishing (e.g., 'login', 'confirm')")
-                if reasons:
-                    self.email_output.insert(tk.END, f"- {url} ({', '.join(reasons)})\n")
-                else:
-                    self.email_output.insert(tk.END, f"- {url}\n")
-
-        if results['spoofed_domains']:
-            self.email_output.insert(tk.END, "\nPotential domain spoofing detected:\n", "warning")
-            for domain in results['spoofed_domains']:
-                self.email_output.insert(tk.END, f"- {domain}: May imitate a trusted source by slight spelling variations or extra characters (e.g., ‘@secure-bank-login.com’ instead of ‘@bank.com’)\n")
-
-        # No suspicious elements
-        if risk_score == 0:
-            self.email_output.insert(tk.END, "\nNo suspicious indicators detected.")
-    def create_output_display(self, parent):
-        """Create scrolled text widget for output"""
-        output = scrolledtext.ScrolledText(
-            parent,
-            font=self.fonts['text'],
-            bg=self.colors['bg_light'],
-            fg=self.colors['text'],
-            insertbackground=self.colors['text'],
-            height=15
-        )
-        output.pack(fill='both', expand=True, padx=10, pady=5)
-        return output
-
-    # [Previous methods for scanning and analysis remain the same]
-    def validate_ip(self, ip_address: str) -> bool:
-        """Validate if the given string is a valid IP address"""
-        try:
-            ipaddress.ip_address(ip_address)
-            return True
-        except ValueError:
-            return False
-
-    def start_scan(self):
-        """Start port scan with input validation"""
-        target = self.target_ip.get().strip()
-        
-        # Validate IP address
-        if not target:
-            messagebox.showerror("Error", "Please enter an IP address")
-            return
-        
-        if not self.validate_ip(target):
-            messagebox.showerror("Error", "Invalid IP address format")
-            return
-            
-        # Validate port range
-        try:
-            start_port = self.start_port.get()
-            end_port = self.end_port.get()
-            
-            if not (1 <= start_port <= 65535 and 1 <= end_port <= 65535):
-                messagebox.showerror("Error", "Ports must be between 1 and 65535")
-                return
-                
-            if start_port > end_port:
-                messagebox.showerror("Error", "Start port must be less than or equal to end port")
-                return
-                
-        except tk.TclError:
-            messagebox.showerror("Error", "Invalid port numbers")
-            return
-        
-        self.scan_button.config(state=tk.DISABLED)
-        self.stop_button.config(state=tk.NORMAL)
-        self.scan_output.delete(1.0, tk.END)
-        self.scan_active = True
-        threading.Thread(target=self.run_scan, daemon=True).start()
-
-    def stop_scan(self):
-        """Stop the scan gracefully"""
-        self.scan_active = False
-        self.stop_button.config(state=tk.DISABLED)
-        self.scan_output.insert(tk.END, "\nStopping scan...\n")
-        
-        # Clear remaining ports
-        while not self.port_queue.empty():
-            self.port_queue.get()
-        
-        # Wait for threads to finish
-        for thread in self.scan_threads:
-            thread.join(timeout=0.1)
-        
-        self.scan_threads.clear()
-        self.scan_button.config(state=tk.NORMAL)
-        self.scan_output.insert(tk.END, "Scan stopped by user\n")
-        self.progress_bar['value'] = 0
-
-    def worker_scan(self, target):
-        """Enhanced worker thread for scanning ports with service identification"""
-        socket.setdefaulttimeout(1)
-        
-        while self.scan_active:
-            try:
-                port = self.port_queue.get_nowait()
-            except queue.Empty:
-                return  # Exit when no more ports to scan
-
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    result = sock.connect_ex((target, port))
-                    if result == 0:
-                        service_info = self.identify_service(port)
-                        risk_level = self.assess_risk_level(port, service_info)
-                        message = self.format_port_result(port, service_info, risk_level)
-                        self.results_queue.put((message, risk_level))
-                        self.root.after(0, self.update_scan_output, message, risk_level)
-
-            except Exception as e:
-                print(f"Error scanning port {port}: {str(e)}")
-            finally:
-                self.port_queue.task_done()
-
-    def identify_service(self, port: int) -> Tuple[str, str]:
-        """Identify service and security implications for a given port"""
-        if port in self.common_ports:
-            return self.common_ports[port]
-        else:
-            return ("Unknown Service", "Unidentified service - could be custom application or security risk.")
-
-    def assess_risk_level(self, port: int, service_info: Tuple[str, str]) -> str:
-        """Assess the risk level of an open port"""
-        service_name, description = service_info
-        
-        # Define critical ports that should usually be closed
-        critical_ports = {23, 135, 139, 445, 3389}
-        high_risk_ports = {21, 80, 110, 143, 1433, 1521, 3306, 5432, 5900, 27017}
-        medium_risk_ports = {20, 25, 53, 8080}
-        
-        if port in critical_ports:
-            return "CRITICAL"
-        elif port in high_risk_ports:
-            return "HIGH"
-        elif port in medium_risk_ports:
-            return "MEDIUM"
-        elif port == 443 or port == 22:  # Secure ports
-            return "LOW"
-        else:
-            return "MEDIUM"  # Unknown ports treated as medium risk
-
-    def format_port_result(self, port: int, service_info: Tuple[str, str], risk_level: str) -> str:
-        """Format the port scan result message"""
-        service_name, description = service_info
-        return f"""Port {port} is OPEN
-Service: {service_name}
-Risk Level: {risk_level}
-Security Note: {description}
-{'=' * 50}\n"""
-
-    def update_scan_output(self, message: str, risk_level: str):
-        """Update scan output with color-coded results"""
-        self.scan_output.insert(tk.END, message)
-        
-        # Apply color tag based on risk level
-        start = self.scan_output.index("end-2c linestart")
-        end = self.scan_output.index("end-1c")
-        
-        # Create and configure tag for risk level color
-        tag_name = f"risk_{risk_level}"
-        self.scan_output.tag_config(tag_name, foreground=self.risk_levels.get(risk_level, "white"))
-        self.scan_output.tag_add(tag_name, start, end)
-        
-        self.scan_output.see(tk.END)
-
-    def run_scan(self):
-        """Execute port scan with threading for speed"""
-        target = self.target_ip.get() or "127.0.0.1"
-        start_port = self.start_port.get()
-        end_port = self.end_port.get()
-        
-        self.scan_output.delete(1.0, tk.END)
-        self.scan_output.insert(tk.END, f"Starting scan on {target}\n \n")
-        
-        port_range = end_port - start_port + 1
-        self.progress_bar['maximum'] = port_range
-        self.progress_bar['value'] = 0
-        
-        # Clear queues
-        while not self.port_queue.empty():
-            self.port_queue.get()
-        while not self.results_queue.empty():
-            self.results_queue.get()
-        
-        # Queue up the ports to scan
-        for port in range(start_port, end_port + 1):
-            self.port_queue.put(port)
-        
-        # Start scan threads
-        self.scan_threads = []
-        thread_count = min(self.MAX_THREADS, port_range)
-        for _ in range(thread_count):
-            thread = threading.Thread(target=self.worker_scan, args=(target,), daemon=True)
-            thread.start()
-            self.scan_threads.append(thread)
-
-        # Start progress update thread
-        threading.Thread(target=self.update_progress, daemon=True).start()
-
-    def update_progress(self):
-        """Update progress bar and check for scan completion"""
-        initial_total = self.progress_bar['maximum']
-        
-        while self.scan_active:
-            try:
-                remaining = self.port_queue.qsize()
-                completed = initial_total - remaining
-                self.progress_bar['value'] = completed
-                
-                # Check if scan is complete
-                if remaining == 0:
-                    # Wait briefly to ensure all results are processed
-                    self.root.after(100)
-                    self.complete_scan()
-                    break
-                
-                self.root.update_idletasks()
-                self.root.after(100)  # Update every 100ms
-            except Exception as e:
-                print(f"Error updating progress: {str(e)}")
-                break
-
-    def complete_scan(self):
-        """Handle scan completion"""
-        self.scan_active = False
-        
-        # Clean up threads
-        for thread in self.scan_threads:
-            thread.join(timeout=0.1)
-        
-        self.scan_threads.clear()
-        
-        # Update UI
-        self.progress_bar['value'] = self.progress_bar['maximum']
-        self.scan_output.insert(tk.END, "\nScan completed!\n")
-        self.scan_output.see(tk.END)
-        self.scan_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-        
-        # Clear queues
-        while not self.port_queue.empty():
-            self.port_queue.get()
-        while not self.results_queue.empty():
-            self.results_queue.get()
-    def create_network_monitor_tab(self):
-        """Create network traffic monitoring interface"""
-        network_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
-        self.notebook.add(network_frame, text='Network Monitor')
-        
         # Control buttons
         controls_frame = ttk.Frame(network_frame, style='Custom.TFrame')
         controls_frame.pack(fill='x', padx=10, pady=5)
@@ -1004,6 +509,13 @@ Security Note: {description}
                 # Update labels
                 self.root.after(0, self.update_network_labels,
                               bytes_sent_rate, bytes_recv_rate, connections)
+                
+                # Log detailed network activity
+                self.log_network_activity(
+                    f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
+                    f"Received: {self.format_bytes(bytes_recv_rate)}/s, "
+                    f"Connections: {connections}"
+                )
                 
                 # Log suspicious activity (high data rates)
                 if bytes_sent_rate > 1000000 or bytes_recv_rate > 1000000:  # 1 MB/s threshold
@@ -1210,7 +722,7 @@ Security Note: {description}
         # Analyze the generated password
         self.analyze_password()
 
-    def create_output_display(self, parent):
+    def create_output_display(self, parent, state='normal'):
         """Create scrolled text widget for output"""
         output = scrolledtext.ScrolledText(
             parent,
@@ -1219,7 +731,804 @@ Security Note: {description}
             fg=self.colors['text'],
             insertbackground=self.colors['text'],
             height=15,
-            state='normal'  # Make read-only by default
+            state=state  # Make read-only by default
+        )
+        output.pack(fill='both', expand=True, padx=10, pady=5)
+        return output
+    def create_email_analyzer_tab(self):
+        """Create email analyzer interface"""
+        email_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
+        self.notebook.add(email_frame, text='Email Analyzer')
+        
+        # Instructions
+        instructions = """Paste email content below for phishing analysis.
+        The analyzer will check for:
+        • Suspicious sender patterns
+        • Urgency indicators
+        • Sensitive information requests
+        • URL manipulation
+        • Domain spoofing
+        • Time pressure tactics"""
+        
+        ttk.Label(email_frame, 
+                 text=instructions,
+                 font=self.fonts['text'],
+                 foreground=self.colors['text'],
+                 style='Custom.TLabel',
+                 justify='left').pack(pady=5, padx=10)
+        
+        # Email input
+        self.email_input = self.create_output_display(email_frame)
+        self.email_input.configure(height=10)
+        
+        # Analysis button
+        ttk.Button(
+            email_frame,
+            text="Analyze Email",
+            command=self.analyze_email,
+            style='Custom.TButton'
+        ).pack(pady=10)
+        
+        # Results display
+        self.email_output = self.create_output_display(email_frame, state='disabled')
+    def analyze_email(self):
+        """Analyze email content for potential phishing indicators"""
+        email_content = self.email_input.get("1.0", tk.END).strip()
+        
+        if not email_content:
+            messagebox.showerror("Error", "Please enter email content to analyze")
+            return
+            
+        self.email_output.delete("1.0", tk.END)
+        
+        # Parse email content
+        try:
+            msg = email.message_from_string(email_content)
+        except Exception as e:
+            self.email_output.insert(tk.END, "Error parsing email content\n")
+            return
+            
+        # Initialize analysis results
+        analysis_results = {
+            'urgency_count': 0,
+            'sensitive_count': 0,
+            'suspicious_urls': [],
+            'spoofed_domains': [],
+            'risk_score': 0
+        }
+        
+        # Analyze headers
+        self._analyze_headers(msg, analysis_results)
+        
+        # Analyze body content
+        self._analyze_body(msg, analysis_results)
+        
+        # Calculate risk score (0-100)
+        risk_score = self._calculate_risk_score(analysis_results)
+        
+        # Display results
+        self._display_analysis_results(analysis_results, risk_score)
+
+    def _analyze_headers(self, msg: Message, results: Dict):
+        from_header = msg.get('from', '')
+        if from_header:
+            domain = from_header.split('@')[-1].strip('>')
+            # SPF/DKIM check example
+            if 'spf=fail' in msg.get('Received-SPF', '') or 'dkim=fail' in msg.get('Authentication-Results', ''):
+                results['risk_score'] += 20
+                results['spoofed_domains'].append(domain)
+        
+        # Check reply-to mismatch
+        reply_to = msg.get('reply-to', '')
+        if reply_to and from_header and '@' in reply_to and '@' in from_header:
+            reply_domain = reply_to.split('@')[-1].strip('>')
+            from_domain = from_header.split('@')[-1].strip('>')
+            if reply_domain != from_domain:
+                results['risk_score'] += 20
+
+    def _analyze_body(self, msg: Message, results: Dict):
+        """Analyze email body for suspicious content"""
+        # Get email body content
+        if msg.is_multipart():
+            body = ''
+            for part in msg.walk():
+                # Check if it's text/plain or text/html part
+                if part.get_content_type() == "text/plain":
+                    body += part.get_payload(decode=True).decode()
+                elif part.get_content_type() == "text/html":
+                    html_content = part.get_payload(decode=True).decode()
+                    body += html_content
+        else:
+            body = msg.get_payload(decode=True).decode() if msg.get_payload() else ''
+        
+        # Parse HTML with BeautifulSoup to extract all links
+        soup = BeautifulSoup(body, 'html.parser')
+        all_links = [a['href'] for a in soup.find_all('a', href=True)]
+
+        # Analyze all found links for suspicious patterns
+        for url in all_links:
+            try:
+                parsed = urllib.parse.urlparse(url)
+                if self._is_suspicious_url(parsed):
+                    results['suspicious_urls'].append(url)
+            except Exception:
+                continue
+
+        # Check for urgency indicators
+        for word in self.phishing_indicators['urgency_words']:
+            if word.lower() in body.lower():
+                results['urgency_count'] += 1
+        
+        # Check for sensitive information requests
+        for word in self.phishing_indicators['sensitive_words']:
+            if word.lower() in body.lower():
+                results['sensitive_count'] += 1
+        
+        # Sentiment analysis to detect urgency or fear-inducing language
+        blob = TextBlob(body)
+        sentiment = blob.sentiment.polarity
+        if sentiment < -0.3:  # Threshold for detecting negative sentiment
+            results['urgency_count'] += 1  # Increase urgency count if aggressive language detected
+        
+        # Combine HTML and plain text URL analysis
+        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', body)
+        urls += all_links  # Include all HTML links
+        urls = list(set(urls))  # Remove duplicates
+        
+        # Analyze all URLs for suspicious indicators
+        for url in urls:
+            try:
+                parsed = urllib.parse.urlparse(url)
+                if self._is_suspicious_url(parsed):
+                    results['suspicious_urls'].append(url)
+            except Exception:
+                continue
+
+    def _is_suspicious_url(self, parsed_url) -> bool:
+        """Check if a URL has suspicious characteristics"""
+        suspicious_indicators = [
+            'login', 'signin', 'account', 'verify', 'secure', 'update',
+            'confirm', 'password', 'banking'
+        ]
+        
+        domain = parsed_url.netloc.lower()
+        path = parsed_url.path.lower()
+        
+        # Check for IP-based URLs
+        if re.match(r'\d+\.\d+\.\d+\.\d+', domain):
+            return True
+            
+        # Check for suspicious keywords in domain or path
+        for indicator in suspicious_indicators:
+            if indicator in domain or indicator in path:
+                return True
+                
+        # Check for domain spoofing patterns
+        for legitimate in self.phishing_indicators['common_spoofed_domains']:
+            if legitimate in domain and not domain.endswith(('.com', '.org', '.net')):
+                return True
+                
+        return False
+
+    def _calculate_risk_score(self, results: Dict) -> int:
+        """Calculate overall phishing risk score"""
+        score = 0
+        
+        # Add points for urgency indicators
+        score += min(results['urgency_count'] * 10, 30)
+        
+        # Add points for sensitive information requests
+        score += min(results['sensitive_count'] * 15, 30)
+        
+        # Add points for suspicious URLs
+        score += min(len(results['suspicious_urls']) * 20, 30)
+        
+        # Add points for spoofed domains
+        score += min(len(results['spoofed_domains']) * 25, 40)
+        
+        return min(score, 100)
+
+    def _display_analysis_results(self, results: Dict, risk_score: int):
+        """Display analysis results in the output text widget with detailed reasons for suspicion"""
+        self.email_output.delete("1.0", tk.END)
+        
+        # Display risk score with color coding
+        if risk_score < 30:
+            risk_color = self.colors['success']
+        elif risk_score < 70:
+            risk_color = self.colors['warning']
+        else:
+            risk_color = self.colors['danger']
+            
+        self.email_output.insert(tk.END, f"Risk Score: {risk_score}/100\n", f"risk_{risk_color}")
+        self.email_output.insert(tk.END, "\n")
+
+        # Display detailed findings with specific reasons
+        if results['urgency_count'] > 0:
+            self.email_output.insert(tk.END, f"⚠ Found {results['urgency_count']} urgency indicators:\n", "warning")
+            self.email_output.insert(tk.END, "These terms often attempt to rush or pressure the recipient into quick actions, such as ‘immediate response,’ ‘urgent,’ or ‘deadline approaching.’\n\n")
+
+        if results['sensitive_count'] > 0:
+            self.email_output.insert(tk.END, f"⚠ Found {results['sensitive_count']} requests for sensitive information:\n", "warning")
+            self.email_output.insert(tk.END, "Terms suggesting requests for personal or sensitive data, like ‘password,’ ‘account,’ or ‘verification,’ indicate potential phishing attempts aiming to collect confidential information.\n\n")
+
+        if results['suspicious_urls']:
+            self.email_output.insert(tk.END, "\nSuspicious URLs detected:\n", "warning")
+            for url in results['suspicious_urls']:
+                reasons = []
+                parsed = urllib.parse.urlparse(url)
+                if re.match(r'\d+\.\d+\.\d+\.\d+', parsed.netloc):
+                    reasons.append("IP-based URL")
+                if any(keyword in parsed.path.lower() for keyword in ["login", "verify", "account", "confirm"]):
+                    reasons.append("keyword suggesting phishing (e.g., 'login', 'confirm')")
+                if reasons:
+                    self.email_output.insert(tk.END, f"- {url} ({', '.join(reasons)})\n")
+                else:
+                    self.email_output.insert(tk.END, f"- {url}\n")
+
+        if results['spoofed_domains']:
+            self.email_output.insert(tk.END, "\nPotential domain spoofing detected:\n", "warning")
+            for domain in results['spoofed_domains']:
+                self.email_output.insert(tk.END, f"- {domain}: May imitate a trusted source by slight spelling variations or extra characters (e.g., ‘@secure-bank-login.com’ instead of ‘@bank.com’)\n")
+
+        # No suspicious elements
+        if risk_score == 0:
+            self.email_output.insert(tk.END, "\nNo suspicious indicators detected.")
+    def create_output_display(self, parent, state='normal'):
+        """Create scrolled text widget for output"""
+        output = scrolledtext.ScrolledText(
+            parent,
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            insertbackground=self.colors['text'],
+            height=15,
+            state=state  # Make read-only by default
+        )
+        output.pack(fill='both', expand=True, padx=10, pady=5)
+        return output
+
+    # [Previous methods for scanning and analysis remain the same]
+    def validate_ip(self, ip_address: str) -> bool:
+        """Validate if the given string is a valid IP address"""
+        try:
+            ipaddress.ip_address(ip_address)
+            return True
+        except ValueError:
+            return False
+
+    def start_scan(self):
+        """Start port scan with input validation"""
+        target = self.target_ip.get().strip()
+        
+        # Validate IP address
+        if not target:
+            messagebox.showerror("Error", "Please enter an IP address")
+            return
+        
+        if not self.validate_ip(target):
+            messagebox.showerror("Error", "Invalid IP address format")
+            return
+            
+        # Validate port range
+        try:
+            start_port = self.start_port.get()
+            end_port = self.end_port.get()
+            
+            if not (1 <= start_port <= 65535 and 1 <= end_port <= 65535):
+                messagebox.showerror("Error", "Ports must be between 1 and 65535")
+                return
+                
+            if start_port > end_port:
+                messagebox.showerror("Error", "Start port must be less than or equal to end port")
+                return
+                
+        except tk.TclError:
+            messagebox.showerror("Error", "Invalid port numbers")
+            return
+        
+        self.scan_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.scan_output.delete(1.0, tk.END)
+        self.scan_active = True
+        threading.Thread(target=self.run_scan, daemon=True).start()
+
+    def stop_scan(self):
+        """Stop the scan gracefully"""
+        self.scan_active = False
+        self.stop_button.config(state=tk.DISABLED)
+        self.scan_output.insert(tk.END, "\nStopping scan...\n")
+        
+        # Clear remaining ports
+        while not self.port_queue.empty():
+            self.port_queue.get()
+        
+        # Wait for threads to finish
+        for thread in self.scan_threads:
+            thread.join(timeout=0.1)
+        
+        self.scan_threads.clear()
+        self.scan_button.config(state=tk.NORMAL)
+        self.scan_output.insert(tk.END, "Scan stopped by user\n")
+        self.progress_bar['value'] = 0
+
+    def worker_scan(self, target):
+        """Enhanced worker thread for scanning ports with service identification"""
+        socket.setdefaulttimeout(1)
+        
+        while self.scan_active:
+            try:
+                port = self.port_queue.get_nowait()
+            except queue.Empty:
+                return  # Exit when no more ports to scan
+
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    result = sock.connect_ex((target, port))
+                    if result == 0:
+                        service_info = self.identify_service(port)
+                        risk_level = self.assess_risk_level(port, service_info)
+                        message = self.format_port_result(port, service_info, risk_level)
+                        self.results_queue.put((message, risk_level))
+                        self.root.after(0, self.update_scan_output, message, risk_level)
+
+            except Exception as e:
+                print(f"Error scanning port {port}: {str(e)}")
+            finally:
+                self.port_queue.task_done()
+
+    def identify_service(self, port: int) -> Tuple[str, str]:
+        """Identify service and security implications for a given port"""
+        if port in self.common_ports:
+            return self.common_ports[port]
+        else:
+            return ("Unknown Service", "Unidentified service - could be custom application or security risk.")
+
+    def assess_risk_level(self, port: int, service_info: Tuple[str, str]) -> str:
+        """Assess the risk level of an open port"""
+        service_name, description = service_info
+        
+        # Define critical ports that should usually be closed
+        critical_ports = {23, 135, 139, 445, 3389}
+        high_risk_ports = {21, 80, 110, 143, 1433, 1521, 3306, 5432, 5900, 27017}
+        medium_risk_ports = {20, 25, 53, 8080}
+        
+        if port in critical_ports:
+            return "CRITICAL"
+        elif port in high_risk_ports:
+            return "HIGH"
+        elif port in medium_risk_ports:
+            return "MEDIUM"
+        elif port == 443 or port == 22:  # Secure ports
+            return "LOW"
+        else:
+            return "MEDIUM"  # Unknown ports treated as medium risk
+
+    def format_port_result(self, port: int, service_info: Tuple[str, str], risk_level: str) -> str:
+        """Format the port scan result message"""
+        service_name, description = service_info
+        return f"""Port {port} is OPEN
+Service: {service_name}
+Risk Level: {risk_level}
+Security Note: {description}
+{'=' * 50}\n"""
+
+    def update_scan_output(self, message: str, risk_level: str):
+        """Update scan output with color-coded results"""
+        self.scan_output.insert(tk.END, message)
+        
+        # Apply color tag based on risk level
+        start = self.scan_output.index("end-2c linestart")
+        end = self.scan_output.index("end-1c")
+        
+        # Create and configure tag for risk level color
+        self.scan_output.tag_config(f"risk_{risk_level}", foreground=self.risk_levels.get(risk_level, "white"))
+        self.scan_output.tag_add(f"risk_{risk_level}", start, end)
+        
+        self.scan_output.see(tk.END)
+
+    def run_scan(self):
+        """Execute port scan with threading for speed"""
+        target = self.target_ip.get() or "127.0.0.1"
+        start_port = self.start_port.get()
+        end_port = self.end_port.get()
+        
+        self.scan_output.delete(1.0, tk.END)
+        self.scan_output.insert(tk.END, f"Starting scan on {target}\n \n")
+        
+        port_range = end_port - start_port + 1
+        self.progress_bar['maximum'] = port_range
+        self.progress_bar['value'] = 0
+        
+        # Clear queues
+        while not self.port_queue.empty():
+            self.port_queue.get()
+        while not self.results_queue.empty():
+            self.results_queue.get()
+        
+        # Queue up the ports to scan
+        for port in range(start_port, end_port + 1):
+            self.port_queue.put(port)
+        
+        # Start scan threads
+        self.scan_threads = []
+        thread_count = min(self.MAX_THREADS, port_range)
+        for _ in range(thread_count):
+            thread = threading.Thread(target=self.worker_scan, args=(target,), daemon=True)
+            thread.start()
+            self.scan_threads.append(thread)
+
+        # Start progress update thread
+        threading.Thread(target=self.update_progress, daemon=True).start()
+
+    def update_progress(self):
+        """Update progress bar and check for scan completion"""
+        initial_total = self.progress_bar['maximum']
+        
+        while self.scan_active:
+            try:
+                remaining = self.port_queue.qsize()
+                completed = initial_total - remaining
+                self.progress_bar['value'] = completed
+                
+                # Check if scan is complete
+                if remaining == 0:
+                    # Wait briefly to ensure all results are processed
+                    self.root.after(100)
+                    self.complete_scan()
+                    break
+                
+                self.root.update_idletasks()
+                self.root.after(100)  # Update every 100ms
+            except Exception as e:
+                print(f"Error updating progress: {str(e)}")
+                break
+
+    def complete_scan(self):
+        """Handle scan completion"""
+        self.scan_active = False
+        
+        # Clean up threads
+        for thread in self.scan_threads:
+            thread.join(timeout=0.1)
+        
+        self.scan_threads.clear()
+        
+        # Update UI
+        self.progress_bar['value'] = self.progress_bar['maximum']
+        self.scan_output.insert(tk.END, "\nScan completed!\n")
+        self.scan_output.see(tk.END)
+        self.scan_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        
+        # Clear queues
+        while not self.port_queue.empty():
+            self.port_queue.get()
+        while not self.results_queue.empty():
+            self.results_queue.get()
+    def create_network_monitor_tab(self):
+        """Create network traffic monitoring interface"""
+        network_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
+        self.notebook.add(network_frame, text='Network Monitor')
+        
+        # Control buttons
+        controls_frame = ttk.Frame(network_frame, style='Custom.TFrame')
+        controls_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.monitor_button = ttk.Button(
+            controls_frame,
+            text="Start Monitoring",
+            command=self.toggle_network_monitoring,
+            style='Custom.TButton'
+        )
+        self.monitor_button.pack(side='left', padx=5)
+        
+        # Statistics display
+        stats_frame = ttk.Frame(network_frame, style='Custom.TFrame')
+        stats_frame.pack(fill='x', padx=10, pady=5)
+        
+        # Create labels for network statistics
+        self.bytes_sent_label = ttk.Label(
+            stats_frame,
+            text="Bytes Sent: 0 B/s",
+            font=self.fonts['text'],
+            foreground=self.colors['text'],
+            style='Custom.TLabel'
+        )
+        self.bytes_sent_label.pack(pady=2)
+        
+        self.bytes_recv_label = ttk.Label(
+            stats_frame,
+            text="Bytes Received: 0 B/s",
+            font=self.fonts['text'],
+            foreground=self.colors['text'],
+            style='Custom.TLabel'
+        )
+        self.bytes_recv_label.pack(pady=2)
+        
+        self.connections_label = ttk.Label(
+            stats_frame,
+            text="Active Connections: 0",
+            font=self.fonts['text'],
+            foreground=self.colors['text'],
+            style='Custom.TLabel'
+        )
+        self.connections_label.pack(pady=2)
+        
+        # Network traffic log
+        ttk.Label(network_frame,
+                 text="Network Traffic Log:",
+                 font=self.fonts['header'],
+                 foreground=self.colors['text'],
+                 style='Custom.TLabel').pack(pady=5)
+                 
+        self.network_log = scrolledtext.ScrolledText(
+            network_frame,
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            height=15,
+            state='disabled'
+        )
+        self.network_log.pack(fill='both', expand=True, padx=10, pady=5)
+
+    def toggle_network_monitoring(self):
+        """Toggle network monitoring on/off"""
+        if not self.network_monitoring:
+            self.network_monitoring = True
+            self.monitor_button.config(text="Stop Monitoring")
+            threading.Thread(target=self.monitor_network, daemon=True).start()
+        else:
+            self.network_monitoring = False
+            self.monitor_button.config(text="Start Monitoring")
+
+    def monitor_network(self):
+        """Monitor network traffic and update display"""
+        last_bytes_sent = psutil.net_io_counters().bytes_sent
+        last_bytes_recv = psutil.net_io_counters().bytes_recv
+        last_time = time.time()
+        
+        while self.network_monitoring:
+            try:
+                # Get current network stats
+                current_time = time.time()
+                current_bytes_sent = psutil.net_io_counters().bytes_sent
+                current_bytes_recv = psutil.net_io_counters().bytes_recv
+                
+                # Calculate rates
+                time_delta = current_time - last_time
+                bytes_sent_rate = (current_bytes_sent - last_bytes_sent) / time_delta
+                bytes_recv_rate = (current_bytes_recv - last_bytes_recv) / time_delta
+                
+                # Get connection count
+                connections = len(psutil.net_connections())
+                
+                # Update labels
+                self.root.after(0, self.update_network_labels,
+                              bytes_sent_rate, bytes_recv_rate, connections)
+                
+                # Log detailed network activity
+                self.log_network_activity(
+                    f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
+                    f"Received: {self.format_bytes(bytes_recv_rate)}/s, "
+                    f"Connections: {connections}"
+                )
+                
+                # Log suspicious activity (high data rates)
+                if bytes_sent_rate > 1000000 or bytes_recv_rate > 1000000:  # 1 MB/s threshold
+                    self.log_network_activity(
+                        f"High data transfer rate detected! "
+                        f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
+                        f"Received: {self.format_bytes(bytes_recv_rate)}/s"
+                    )
+                
+                # Update last values
+                last_bytes_sent = current_bytes_sent
+                last_bytes_recv = current_bytes_recv
+                last_time = current_time
+                
+                time.sleep(1)  # Update every second
+                
+            except Exception as e:
+                self.log_network_activity(f"Error monitoring network: {str(e)}")
+                break
+
+    def update_network_labels(self, sent_rate, recv_rate, connections):
+        """Update network statistics labels"""
+        self.bytes_sent_label.config(text=f"Bytes Sent: {self.format_bytes(sent_rate)}/s")
+        self.bytes_recv_label.config(text=f"Bytes Received: {self.format_bytes(recv_rate)}/s")
+        self.connections_label.config(text=f"Active Connections: {connections}")
+
+    def log_network_activity(self, message: str):
+        """Add message to network log"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.network_log.config(state='normal')
+        self.network_log.insert(tk.END, f"[{timestamp}] {message}\n")
+        self.network_log.see(tk.END)
+        self.network_log.config(state='disabled')
+
+    def format_bytes(self, bytes: float) -> str:
+        """Format bytes into human-readable format"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes < 1024:
+                return f"{bytes:.2f} {unit}"
+            bytes /= 1024
+        return f"{bytes:.2f} TB"
+
+    def create_password_analyzer_tab(self):
+        """Create password strength analyzer interface"""
+        password_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
+        self.notebook.add(password_frame, text='Password Analyzer')
+        
+        # Password input
+        input_frame = ttk.Frame(password_frame, style='Custom.TFrame')
+        input_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(input_frame,
+                 text="Enter Password:",
+                 font=self.fonts['header'],
+                 foreground=self.colors['text'],
+                 style='Custom.TLabel').pack(side='left', padx=5)
+                 
+        self.password_input = ttk.Entry(
+            input_frame,
+            font=self.fonts['text'],
+            style='Custom.TEntry',
+            # show='•'  # Mask password
+        )
+        self.password_input.pack(side='left', padx=5, fill='x', expand=True)
+        
+        # Analysis controls
+        control_frame = ttk.Frame(password_frame, style='Custom.TFrame')
+        control_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Button(
+            control_frame,
+            text="Analyze Password",
+            command=self.analyze_password,
+            style='Custom.TButton'
+        ).pack(side='left', padx=5)
+        
+        ttk.Button(
+            control_frame,
+            text="Generate Strong Password",
+            command=self.generate_password,
+            style='Custom.TButton'
+        ).pack(side='left', padx=5)
+        
+        # Results display
+        self.password_output = scrolledtext.ScrolledText(
+            password_frame,
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            height=15,
+            state='disabled'
+        )
+        self.password_output.pack(fill='both', expand=True, padx=10, pady=5)
+
+    def analyze_password(self):
+        """Analyze password strength"""
+        password = self.password_input.get()
+        
+        if not password:
+            messagebox.showerror("Error", "Please enter a password")
+            return
+            
+        # Calculate strength metrics
+        length_score = min(len(password) / self.password_requirements['length'], 1.0)
+        has_upper = any(c.isupper() for c in password)
+        has_lower = any(c.islower() for c in password)
+        has_digit = any(c.isdigit() for c in password)
+        has_special = any(not c.isalnum() for c in password)
+        
+        # Calculate entropy
+        charset_size = 0
+        if has_upper: charset_size += 26
+        if has_lower: charset_size += 26
+        if has_digit: charset_size += 10
+        if has_special: charset_size += 32
+        entropy = len(password) * (charset_size.bit_length() if charset_size > 0 else 0)
+        
+        # Check common patterns
+        patterns = [
+            (r'\d{4}', "Contains 4-digit sequence"),
+            (r'(?i)password', "Contains 'password'"),
+            (r'(?i)admin', "Contains 'admin'"),
+            (r'(.)\1{2,}', "Contains repeated characters"),
+            (r'(?i)qwerty', "Contains 'qwerty'"),
+            (r'12345', "Contains '12345'")
+        ]
+        
+        found_patterns = []
+        for pattern, msg in patterns:
+            if re.search(pattern, password):
+                found_patterns.append(msg)
+        
+        # Calculate overall strength (0-100)
+        strength = (
+            length_score * 30 +
+            has_upper * 15 +
+            has_lower * 15 +
+            has_digit * 20 +
+            has_special * 20
+        )
+        strength = max(0, strength - (len(found_patterns) * 10))
+        
+        # Display results
+        self.password_output.config(state='normal')
+        self.password_output.delete(1.0, tk.END)
+        
+        self.password_output.insert(tk.END, f"Password Strength Analysis:\n\n")
+        self.password_output.insert(tk.END, f"Overall Strength: {strength:.0f}/100\n")
+        self.password_output.insert(tk.END, f"Entropy: {entropy} bits\n\n")
+        
+        self.password_output.insert(tk.END, "Requirements Met:\n")
+        self.password_output.insert(tk.END, f"✓ Length ({len(password)}/{self.password_requirements['length']})\n" if length_score >= 1 else f"✗ Length ({len(password)}/{self.password_requirements['length']})\n")
+        self.password_output.insert(tk.END, "✓ Uppercase\n" if has_upper else "✗ Uppercase\n")
+        self.password_output.insert(tk.END, "✓ Lowercase\n" if has_lower else "✗ Lowercase\n")
+        self.password_output.insert(tk.END, "✓ Numbers\n" if has_digit else "✗ Numbers\n")
+        self.password_output.insert(tk.END, "✓ Special Characters\n" if has_special else "✗ Special Characters\n")
+        
+        
+        if found_patterns:
+            self.password_output.insert(tk.END, "\nWarnings:\n")
+            for pattern in found_patterns:
+                self.password_output.insert(tk.END, f"! {pattern}\n")
+        
+        # Hash information
+        self.password_output.insert(tk.END, "\nPassword Hashes:\n")
+        self.password_output.insert(tk.END, f"MD5: {hashlib.md5(password.encode()).hexdigest()}\n")
+        self.password_output.insert(tk.END, f"SHA-256: {hashlib.sha256(password.encode()).hexdigest()}\n")
+        
+        self.password_output.insert(tk.END, f"\nPassword: {password}\n")
+        
+        self.password_output.config(state='disabled')
+
+    def generate_password(self):
+        """Generate a strong password"""
+        length = self.password_requirements['length']
+        
+        # Character sets
+        uppercase = string.ascii_uppercase
+        lowercase = string.ascii_lowercase
+        digits = string.digits
+        special = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+        
+        # Ensure at least one character from each set
+        password = [
+            random.choice(uppercase),
+            random.choice(lowercase),
+            random.choice(digits),
+            random.choice(special)
+        ]
+        
+        # Fill remaining length with random characters
+        all_chars = uppercase + lowercase + digits + special
+        for _ in range(length - len(password)):
+            password.append(random.choice(all_chars))
+            
+        # Shuffle password
+        random.shuffle(password)
+        password = ''.join(password)
+        
+        # Update input field
+        self.password_input.delete(0, tk.END)
+        self.password_input.insert(0, password)
+        
+        # Analyze the generated password
+        self.analyze_password()
+
+    def create_output_display(self, parent, state='normal'):
+        """Create scrolled text widget for output"""
+        output = scrolledtext.ScrolledText(
+            parent,
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            insertbackground=self.colors['text'],
+            height=15,
+            state=state  # Make read-only by default
         )
         output.pack(fill='both', expand=True, padx=10, pady=5)
         return output
