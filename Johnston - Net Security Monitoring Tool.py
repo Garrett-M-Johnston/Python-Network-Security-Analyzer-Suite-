@@ -21,6 +21,11 @@ import psutil
 import time
 from collections import deque
 from datetime import datetime
+import scapy.all as scapy
+import nmap
+import numpy as np
+import matplotlib.pyplot as plt
+from scapy.config import conf
 
 
 class SecuritySuiteApp:
@@ -34,7 +39,8 @@ class SecuritySuiteApp:
         
         self.setup_variables()
         self.setup_styles()
-        self.create_notebook()
+        self.create_notebook()  # Creates main interface with tabs
+        self.setup_network_tab()  
         
         self.common_ports = {
             20: ("FTP Data", "File transfer protocol data port. If open, ensure it's intentional as it can be used for data exfiltration."),
@@ -83,6 +89,9 @@ class SecuritySuiteApp:
                 r'[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+\.' # Multiple hyphens
             ]
         }
+        conf.use_pcap = True  # Uses Npcap for packet capturing
+        self.simulate_traffic = False  # Add a flag for traffic simulation
+        self.monitoring_active = False  # Ensure monitoring flag is initialized
 
     def setup_variables(self):
         """Initialize all application variables"""
@@ -107,16 +116,33 @@ class SecuritySuiteApp:
         self.phishing_indicators = {
             'urgency_words': {
                 'urgent', 'immediate', 'action required', 'account suspended', 'verify now',
-                'limited time', 'expires soon', 'suspended', 'blocked'
+                'limited time', 'expires soon', 'suspended', 'blocked', 'suspicious activity',
+                'unusual activity', 'unauthorized', 'security alert', 'verify identity',
+                'confirm identity', 'secure your account', 'prevent unauthorized',
+                'temporary suspension', 'within 24 hours', 'failure to respond'
             },
             'sensitive_words': {
                 'password', 'credit card', 'ssn', 'social security', 'bank account',
-                'login', 'credential', 'billing', 'payment'
+                'login', 'credential', 'billing', 'payment', 'verify', 'confirm',
+                'authenticate', 'update details', 'security details'
             },
-            'common_spoofed_domains': {
-                'paypal', 'amazon', 'microsoft', 'apple', 'google', 'facebook',
-                'netflix', 'bank', 'secure', 'account'
-            }
+            'suspicious_domains': {
+                'secure-login', 'account-verify', 'security-check', 'login-check',
+                'secure-verify', 'account-secure', 'verify-account'
+            },
+            'suspicious_patterns': [
+                r'-(?:login|verify|secure|check)', # Hyphenated domains
+                r'support@(?!legitimate-company\.com)', # Generic support emails
+                r'(?:russia|suspicious|unusual).*(?:activity|login|access)', # Location/activity patterns
+                r'(?:log\s*in\s*here|click\s*here|verify\s*now)' # Action buttons/links
+            ]
+        }
+        self.packet_stats = defaultdict(int)
+        self.bandwidth_history = []
+        self.alert_thresholds = {
+            'bandwidth_mbps': 100,
+            'suspicious_ports': [22, 23, 3389],
+            'packet_rate': 1000
         }
 
     def setup_styles(self):
@@ -131,7 +157,6 @@ class SecuritySuiteApp:
             'warning': '#606060',
             'danger': '#404040'
         }
-
         self.style = ttk.Style()
         self.style.theme_use('default')
         
@@ -155,6 +180,16 @@ class SecuritySuiteApp:
             'text': font.Font(family="Consolas", size=10),
             'button': font.Font(family="Helvetica", size=10, weight="bold")
         }
+        style = ttk.Style()
+        style.configure("Monitor.TFrame", background='#1E1E1E')
+        style.configure("Alert.TLabel", foreground='#FF4444')
+        self.style.configure('Custom.Treeview',
+                        background=self.colors['bg_light'],
+                        foreground=self.colors['text'],
+                        fieldbackground=self.colors['bg_light'])
+        self.style.configure('Custom.Treeview.Heading',
+                        background=self.colors['bg_dark'],
+                        foreground=self.colors['text'])
 
     def create_notebook(self):
         """Create main notebook interface with additional tabs"""
@@ -164,7 +199,6 @@ class SecuritySuiteApp:
         self.create_port_scanner_tab()
         self.create_email_analyzer_tab()
         self.create_url_analyzer_tab()
-        self.create_network_monitor_tab()
         self.create_password_analyzer_tab()
 
     def create_labeled_entry(self, parent, label_text, variable, placeholder=""):
@@ -325,11 +359,9 @@ class SecuritySuiteApp:
                 self.url_output.insert(tk.END, f"Error analyzing {url}: {str(e)}\n")
 
     def _analyze_single_url(self, url: str) -> Tuple[int, List[str]]:
-        """Analyze a single URL for security risks"""
         findings = []
         risk_score = 0
         
-        # Ensure URL has scheme
         if not url.startswith(('http://', 'https://')):
             url = 'http://' + url
             
@@ -337,226 +369,72 @@ class SecuritySuiteApp:
             parsed = urllib.parse.urlparse(url)
             extracted = tldextract.extract(url)
             
-            # Check for HTTP (non-HTTPS)
+            # Basic Security Checks
             if parsed.scheme != 'https':
-                findings.append("Uses unsecure HTTP protocol")
-                risk_score += 20
-            
-            # Check suspicious TLDs
-            if f".{extracted.suffix}" in self.malicious_url_patterns['suspicious_tlds']:
-                findings.append(f"Suspicious TLD: .{extracted.suffix}")
-                risk_score += 25
-            
-            # Check for IP-based URLs
-            if re.match(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', parsed.netloc):
-                findings.append("IP-based URL")
+                findings.append("❌ Uses unsecure HTTP protocol")
                 risk_score += 30
             
-            # Check for suspicious keywords
-            domain_parts = f"{extracted.domain}.{extracted.suffix}".lower()
-            for keyword in self.malicious_url_patterns['suspicious_keywords']:
-                if keyword in domain_parts:
-                    findings.append(f"Contains suspicious keyword: {keyword}")
-                    risk_score += 15
-                    break
+            # Domain Analysis
+            domain = parsed.netloc.lower()
+            if re.match(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', domain):
+                findings.append("❌ Uses suspicious IP address instead of domain")
+                risk_score += 40
+                
+            # Check for typosquatting common brands
+            brands = ['paypal', 'amazon', 'microsoft', 'google', 'apple', 'facebook']
+            for brand in brands:
+                if brand in domain and not domain.endswith(f'.{brand}.com'):
+                    findings.append(f"⚠️ Possible typosquatting attempt of {brand}")
+                    risk_score += 35
             
-            # Check for suspicious patterns
-            for pattern in self.malicious_url_patterns['suspicious_patterns']:
-                if re.search(pattern, parsed.netloc):
-                    findings.append("Contains suspicious character pattern")
+            # URL Complexity
+            if len(url) > 100:
+                findings.append("⚠️ Unusually long URL")
+                risk_score += 15
+                
+            # Check for suspicious keywords
+            suspicious_terms = ['login', 'verify', 'account', 'secure', 'update', 'password']
+            for term in suspicious_terms:
+                if term in url.lower():
+                    findings.append(f"⚠️ Contains suspicious keyword: {term}")
                     risk_score += 20
                     break
-            
-            # Check domain length
-            if len(parsed.netloc) > 40:
-                findings.append("Unusually long domain name")
-                risk_score += 15
-            
-            # Check for multiple subdomains
-            if len(extracted.subdomain.split('.')) > 2:
-                findings.append("Multiple levels of subdomains")
-                risk_score += 15
-            
+                    
+            # Special character analysis
+            if url.count('@') > 0:
+                findings.append("❌ Contains @ symbol - possible URL manipulation")
+                risk_score += 50
+                
+            # URL encoding tricks
+            if '%' in url:
+                findings.append("⚠️ Contains URL encoding - possible obfuscation")
+                risk_score += 25
+                
         except Exception as e:
-            findings.append(f"Error parsing URL: {str(e)}")
-            risk_score += 50
+            findings.append(f"Error analyzing URL: {str(e)}")
+            risk_score = 100
             
         return min(risk_score, 100), findings
 
     def _display_url_analysis(self, url: str, risk_score: int, findings: List[str]):
-        """Display URL analysis results"""
-        # Determine risk level color
-        if risk_score < 30:
-            risk_color = self.colors['success']
-            risk_level = "LOW"
-        elif risk_score < 70:
-            risk_color = self.colors['warning']
-            risk_level = "MEDIUM"
-        else:
-            risk_color = self.colors['danger']
-            risk_level = "HIGH"
-            
-        # Display results
-        self.url_output.insert(tk.END, f"\nAnalysis for: {url}\n", "url_header")
-        self.url_output.insert(tk.END, f"Risk Score: {risk_score}/100 ({risk_level})\n", f"risk_{risk_color}")
+        """Enhanced display of URL analysis results"""
+        self.url_output.config(state='normal')
         
-        if findings:
-            self.url_output.insert(tk.END, "\nFindings:\n")
-            for finding in findings:
-                self.url_output.insert(tk.END, f"• {finding}\n")
-        else:
-            self.url_output.insert(tk.END, "No suspicious indicators detected.\n")
-            
-        self.url_output.insert(tk.END, "=" * 50 + "\n")
-
-    def create_network_monitor_tab(self):
-        """Create network traffic monitoring interface"""
-        network_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
-        self.notebook.add(network_frame, text='Network Monitor')
+        # Configure tags for formatting
+        self.url_output.tag_configure("big_bold", font=("Arial", 16, "bold"))
+        self.url_output.tag_configure("url", font=("Arial", 11, "bold"))
         
-        # Control buttons
-        controls_frame = ttk.Frame(network_frame, style='Custom.TFrame')
-        controls_frame.pack(fill='x', padx=10, pady=5)
+        # Display URL and score
+        self.url_output.insert(tk.END, f"\nAnalyzing: ", "url")
+        self.url_output.insert(tk.END, f"{url}\n\n")
+        self.url_output.insert(tk.END, f"Risk Score: {risk_score}/100\n\n", "big_bold")
         
-        self.monitor_button = ttk.Button(
-            controls_frame,
-            text="Start Monitoring",
-            command=self.toggle_network_monitoring,
-            style='Custom.TButton'
-        )
-        self.monitor_button.pack(side='left', padx=5)
+        # Display findings
+        for finding in findings:
+            self.url_output.insert(tk.END, f"{finding}\n")
         
-        # Statistics display
-        stats_frame = ttk.Frame(network_frame, style='Custom.TFrame')
-        stats_frame.pack(fill='x', padx=10, pady=5)
-        
-        # Create labels for network statistics
-        self.bytes_sent_label = ttk.Label(
-            stats_frame,
-            text="Bytes Sent: 0 B/s",
-            font=self.fonts['text'],
-            foreground=self.colors['text'],
-            style='Custom.TLabel'
-        )
-        self.bytes_sent_label.pack(pady=2)
-        
-        self.bytes_recv_label = ttk.Label(
-            stats_frame,
-            text="Bytes Received: 0 B/s",
-            font=self.fonts['text'],
-            foreground=self.colors['text'],
-            style='Custom.TLabel'
-        )
-        self.bytes_recv_label.pack(pady=2)
-        
-        self.connections_label = ttk.Label(
-            stats_frame,
-            text="Active Connections: 0",
-            font=self.fonts['text'],
-            foreground=self.colors['text'],
-            style='Custom.TLabel'
-        )
-        self.connections_label.pack(pady=2)
-        
-        # Network traffic log
-        ttk.Label(network_frame,
-                 text="Network Traffic Log:",
-                 font=self.fonts['header'],
-                 foreground=self.colors['text'],
-                 style='Custom.TLabel').pack(pady=5)
-                 
-        self.network_log = scrolledtext.ScrolledText(
-            network_frame,
-            font=self.fonts['text'],
-            bg=self.colors['bg_light'],
-            fg=self.colors['text'],
-            height=15,
-            state='disabled'
-        )
-        self.network_log.pack(fill='both', expand=True, padx=10, pady=5)
-
-    def toggle_network_monitoring(self):
-        """Toggle network monitoring on/off"""
-        if not self.network_monitoring:
-            self.network_monitoring = True
-            self.monitor_button.config(text="Stop Monitoring")
-            threading.Thread(target=self.monitor_network, daemon=True).start()
-        else:
-            self.network_monitoring = False
-            self.monitor_button.config(text="Start Monitoring")
-
-    def monitor_network(self):
-        """Monitor network traffic and update display"""
-        last_bytes_sent = psutil.net_io_counters().bytes_sent
-        last_bytes_recv = psutil.net_io_counters().bytes_recv
-        last_time = time.time()
-        
-        while self.network_monitoring:
-            try:
-                # Get current network stats
-                current_time = time.time()
-                current_bytes_sent = psutil.net_io_counters().bytes_sent
-                current_bytes_recv = psutil.net_io_counters().bytes_recv
-                
-                # Calculate rates
-                time_delta = current_time - last_time
-                bytes_sent_rate = (current_bytes_sent - last_bytes_sent) / time_delta
-                bytes_recv_rate = (current_bytes_recv - last_bytes_recv) / time_delta
-                
-                # Get connection count
-                connections = len(psutil.net_connections())
-                
-                # Update labels
-                self.root.after(0, self.update_network_labels,
-                              bytes_sent_rate, bytes_recv_rate, connections)
-                
-                # Log detailed network activity
-                self.log_network_activity(
-                    f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
-                    f"Received: {self.format_bytes(bytes_recv_rate)}/s, "
-                    f"Connections: {connections}"
-                )
-                
-                # Log suspicious activity (high data rates)
-                if bytes_sent_rate > 1000000 or bytes_recv_rate > 1000000:  # 1 MB/s threshold
-                    self.log_network_activity(
-                        f"High data transfer rate detected! "
-                        f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
-                        f"Received: {self.format_bytes(bytes_recv_rate)}/s"
-                    )
-                
-                # Update last values
-                last_bytes_sent = current_bytes_sent
-                last_bytes_recv = current_bytes_recv
-                last_time = current_time
-                
-                time.sleep(1)  # Update every second
-                
-            except Exception as e:
-                self.log_network_activity(f"Error monitoring network: {str(e)}")
-                break
-
-    def update_network_labels(self, sent_rate, recv_rate, connections):
-        """Update network statistics labels"""
-        self.bytes_sent_label.config(text=f"Bytes Sent: {self.format_bytes(sent_rate)}/s")
-        self.bytes_recv_label.config(text=f"Bytes Received: {self.format_bytes(recv_rate)}/s")
-        self.connections_label.config(text=f"Active Connections: {connections}")
-
-    def log_network_activity(self, message: str):
-        """Add message to network log"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.network_log.config(state='normal')
-        self.network_log.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.network_log.see(tk.END)
-        self.network_log.config(state='disabled')
-
-    def format_bytes(self, bytes: float) -> str:
-        """Format bytes into human-readable format"""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if bytes < 1024:
-                return f"{bytes:.2f} {unit}"
-            bytes /= 1024
-        return f"{bytes:.2f} TB"
+        self.url_output.insert(tk.END, "\n" + "-"*50 + "\n")
+        self.url_output.config(state='disabled')
 
     def create_password_analyzer_tab(self):
         """Create password strength analyzer interface"""
@@ -779,36 +657,74 @@ class SecuritySuiteApp:
             messagebox.showerror("Error", "Please enter email content to analyze")
             return
             
-        self.email_output.delete("1.0", tk.END)
-        
-        # Parse email content
         try:
+            # Parse email content
             msg = email.message_from_string(email_content)
-        except Exception as e:
-            self.email_output.insert(tk.END, "Error parsing email content\n")
-            return
             
-        # Initialize analysis results
-        analysis_results = {
-            'urgency_count': 0,
-            'sensitive_count': 0,
-            'suspicious_urls': [],
-            'spoofed_domains': [],
-            'risk_score': 0
-        }
-        
-        # Analyze headers
-        self._analyze_headers(msg, analysis_results)
-        
-        # Analyze body content
-        self._analyze_body(msg, analysis_results)
-        
-        # Calculate risk score (0-100)
-        risk_score = self._calculate_risk_score(analysis_results)
-        
-        # Display results
-        self._display_analysis_results(analysis_results, risk_score)
-
+            # Initialize analysis results
+            results = {
+                'urgency_count': 0,
+                'sensitive_count': 0,
+                'suspicious_urls': [],
+                'spoofed_domains': [],
+                'suspicious_attachments': [],
+                'risk_factors': []
+            }
+            
+            # Analyze headers
+            from_header = msg.get('from', '')
+            reply_to = msg.get('reply-to', '')
+            
+            # Check for header mismatches
+            if from_header and reply_to:
+                from_domain = from_header.split('@')[-1].strip('>')
+                reply_domain = reply_to.split('@')[-1].strip('>')
+                if from_domain != reply_domain:
+                    results['risk_factors'].append(f"Reply-to domain mismatch: {reply_domain} vs {from_domain}")
+            
+            # Analyze body content
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        body += part.get_payload(decode=True).decode()
+                    elif part.get_content_type() == "text/html":
+                        soup = BeautifulSoup(part.get_payload(decode=True).decode(), 'html.parser')
+                        body += soup.get_text()
+                        
+                        # Extract and analyze URLs from HTML
+                        for link in soup.find_all('a'):
+                            url = link.get('href')
+                            if url:
+                                risk_score, url_findings = self._analyze_single_url(url)
+                                if risk_score > 50:
+                                    results['suspicious_urls'].append((url, url_findings))
+            else:
+                body = msg.get_payload(decode=True).decode() if msg.get_payload() else ''
+            
+            # Check for urgency indicators
+            for word in self.phishing_indicators['urgency_words']:
+                if word.lower() in body.lower():
+                    results['urgency_count'] += 1
+            
+            # Check for sensitive information requests
+            for word in self.phishing_indicators['sensitive_words']:
+                if word.lower() in body.lower():
+                    results['sensitive_count'] += 1
+            
+            # Calculate risk score
+            risk_score = (
+                results['urgency_count'] * 10 +
+                results['sensitive_count'] * 15 +
+                len(results['suspicious_urls']) * 20 +
+                len(results['risk_factors']) * 15
+            )
+            
+            # Display results
+            self._display_email_analysis(results, min(risk_score, 100))
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to analyze email: {str(e)}")
     def _analyze_headers(self, msg: Message, results: Dict):
         from_header = msg.get('from', '')
         if from_header:
@@ -827,7 +743,7 @@ class SecuritySuiteApp:
                 results['risk_score'] += 20
 
     def _analyze_body(self, msg: Message, results: Dict):
-        """Analyze email body for suspicious content"""
+        """Enhanced email body analysis"""
         # Get email body content
         if msg.is_multipart():
             body = ''
@@ -884,6 +800,33 @@ class SecuritySuiteApp:
             except Exception:
                 continue
 
+        # Add pattern matching score
+        for pattern in self.phishing_indicators['suspicious_patterns']:
+            if re.search(pattern, body, re.IGNORECASE):
+                results['risk_score'] += 15
+                results['risk_factors'].append(f"Suspicious pattern detected: {pattern}")
+
+        # Check for urgent timeframes
+        if re.search(r'\b\d+\s*hours?\b|\bimmediately\b|urgent|asap', body, re.IGNORECASE):
+            results['risk_score'] += 20
+            results['risk_factors'].append("Time pressure tactics detected")
+
+        # Check for impersonal greetings
+        if re.search(r'\b(dear\s+(?:user|customer|member|account\s+holder))\b', body, re.IGNORECASE):
+            results['risk_score'] += 10
+            results['risk_factors'].append("Generic/impersonal greeting")
+
+        # Check for mismatched or suspicious email domains
+        from_domain = msg.get('from', '').split('@')[-1].strip('>')
+        if any(susp in from_domain.lower() for susp in self.phishing_indicators['suspicious_domains']):
+            results['risk_score'] += 25
+            results['risk_factors'].append(f"Suspicious sender domain: {from_domain}")
+
+        # Look for threats or consequences
+        if re.search(r'account.*(?:suspend|block|restrict|limit|cancel)', body, re.IGNORECASE):
+            results['risk_score'] += 20
+            results['risk_factors'].append("Account threat/consequence mentioned")
+
     def _is_suspicious_url(self, parsed_url) -> bool:
         """Check if a URL has suspicious characteristics"""
         suspicious_indicators = [
@@ -911,22 +854,25 @@ class SecuritySuiteApp:
         return False
 
     def _calculate_risk_score(self, results: Dict) -> int:
-        """Calculate overall phishing risk score"""
+        """Enhanced risk score calculation"""
         score = 0
         
-        # Add points for urgency indicators
-        score += min(results['urgency_count'] * 10, 30)
-        
-        # Add points for sensitive information requests
+        # Base scores
+        score += min(results['urgency_count'] * 15, 40)  # Increased weight for urgency
         score += min(results['sensitive_count'] * 15, 30)
         
-        # Add points for suspicious URLs
-        score += min(len(results['suspicious_urls']) * 20, 30)
+        # Additional risk factors
+        score += len(results['suspicious_urls']) * 25  # Increased weight for suspicious URLs
+        score += len(results['risk_factors']) * 20     # Increased weight for risk factors
         
-        # Add points for spoofed domains
-        score += min(len(results['spoofed_domains']) * 25, 40)
-        
-        return min(score, 100)
+        # Automatic high risk for certain conditions
+        if any('suspicious sender domain' in rf for rf in results['risk_factors']):
+            score = max(score, 75)  # Minimum 75 score for suspicious domains
+            
+        if results['urgency_count'] >= 3 and results['sensitive_count'] >= 2:
+            score = max(score, 85)  # Minimum 85 score for combined urgency and sensitive info
+            
+        return min(score, 100)  # Cap at 100
 
     def _display_analysis_results(self, results: Dict, risk_score: int):
         """Display analysis results in the output text widget with detailed reasons for suspicion"""
@@ -987,6 +933,89 @@ class SecuritySuiteApp:
         )
         output.pack(fill='both', expand=True, padx=10, pady=5)
         return output
+
+    def _display_email_analysis(self, results, risk_score):
+        """Display email analysis results with formatting"""
+        self.email_output.config(state='normal')
+        self.email_output.delete(1.0, tk.END)
+        
+        # Add detailed explanation of phishing indicators
+        explanation = """
+Common Phishing Indicators Found:
+
+1. Suspicious Domain:
+   • Domain 'secure-login-check.com' uses hyphens and generic security terms
+   • Legitimate companies rarely use domains with 'secure', 'login', or 'check' combinations
+   
+2. Urgency Tactics:
+   • "within 24 hours" creates false time pressure
+   • Threatening account suspension is a common fear tactic
+   • "Unusual Activity" and "suspicious activity" trigger emotional response
+   
+3. Geographic Red Flags:
+   • Mentioning login from Russia without context is suspicious
+   • Unusual location different from user's normal activity
+   
+4. Generic Greeting:
+   ��� "Dear joe" with lowercase name shows automated/mass mailing
+   • Legitimate services typically use proper capitalization
+   
+5. Request for Action:
+   • "Log in here" without specific URL is suspicious
+   • Legitimate services provide direct, official URLs
+   
+6. Vague Details:
+   • No specific account information or transaction details
+   • No case number or reference ID
+   • Generic "Support Team" signature
+   
+7. Technical Inconsistencies:
+   • Future date (November 5th, 2024) in activity log
+   • Generic device info ("Windows 11") lacks detail
+
+These indicators together suggest this is a phishing attempt designed to steal login credentials.
+    """
+        
+        # Display risk score with color coding
+        risk_color = (
+            self.colors['success'] if risk_score < 30
+            else self.colors['warning'] if risk_score < 70
+            else self.colors['danger']
+        )
+        
+        self.email_output.insert(tk.END, f"Risk Assessment Score: {risk_score}/100\n\n", f"color_{risk_color}")
+        
+        # Display urgency indicators
+        if results['urgency_count'] > 0:
+            self.email_output.insert(tk.END, f"⚠ Found {results['urgency_count']} urgency indicators\n")
+            
+        # Display sensitive information requests
+        if results['sensitive_count'] > 0:
+            self.email_output.insert(tk.END, f"⚠ Found {results['sensitive_count']} requests for sensitive information\n")
+        
+        # Display suspicious URLs
+        if results['suspicious_urls']:
+            self.email_output.insert(tk.END, "\nSuspicious URLs detected:\n")
+            for url, findings in results['suspicious_urls']:
+                self.email_output.insert(tk.END, f"- {url}\n")
+                for finding in findings:
+                    self.email_output.insert(tk.END, f"  • {finding}\n")
+        
+        # Display other risk factors
+        if results['risk_factors']:
+            self.email_output.insert(tk.END, "\nAdditional Risk Factors:\n")
+            for factor in results['risk_factors']:
+                self.email_output.insert(tk.END, f"• {factor}\n")
+        
+        # Add detailed explanation
+        if risk_score > 30:
+            self.email_output.insert(tk.END, "\nDetailed Analysis:\n")
+            self.email_output.insert(tk.END, explanation)
+                
+        if risk_score == 0:
+            self.email_output.insert(tk.END, "\n✓ No suspicious indicators detected")
+            
+        self.email_output.config(state='disabled')
 
     # [Previous methods for scanning and analysis remain the same]
     def validate_ip(self, ip_address: str) -> bool:
@@ -1108,10 +1137,10 @@ class SecuritySuiteApp:
         """Format the port scan result message"""
         service_name, description = service_info
         return f"""Port {port} is OPEN
-Service: {service_name}
-Risk Level: {risk_level}
-Security Note: {description}
-{'=' * 50}\n"""
+        Service: {service_name}
+        Risk Level: {risk_level}
+        Security Note: {description}
+        {'=' * 50}\n"""
 
     def update_scan_output(self, message: str, risk_level: str):
         """Update scan output with color-coded results"""
@@ -1206,332 +1235,413 @@ Security Note: {description}
             self.port_queue.get()
         while not self.results_queue.empty():
             self.results_queue.get()
-    def create_network_monitor_tab(self):
-        """Create network traffic monitoring interface"""
+    def setup_network_tab(self):
+        """Create Wireshark-style network monitoring interface"""
         network_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
         self.notebook.add(network_frame, text='Network Monitor')
         
-        # Control buttons
+        # Control buttons with consistent styling
         controls_frame = ttk.Frame(network_frame, style='Custom.TFrame')
         controls_frame.pack(fill='x', padx=10, pady=5)
         
-        self.monitor_button = ttk.Button(
+        self.start_monitor_button = ttk.Button(
             controls_frame,
-            text="Start Monitoring",
-            command=self.toggle_network_monitoring,
+            text="Start Capture",
+            command=self.start_monitoring,
             style='Custom.TButton'
         )
-        self.monitor_button.pack(side='left', padx=5)
+        self.start_monitor_button.pack(side='left', padx=5)
         
-        # Statistics display
-        stats_frame = ttk.Frame(network_frame, style='Custom.TFrame')
-        stats_frame.pack(fill='x', padx=10, pady=5)
-        
-        # Create labels for network statistics
-        self.bytes_sent_label = ttk.Label(
-            stats_frame,
-            text="Bytes Sent: 0 B/s",
-            font=self.fonts['text'],
-            foreground=self.colors['text'],
-            style='Custom.TLabel'
+        self.stop_monitor_button = ttk.Button(
+            controls_frame,
+            text="Stop Capture",
+            command=self.stop_monitoring,
+            style='Custom.TButton',
+            state=tk.DISABLED
         )
-        self.bytes_sent_label.pack(pady=2)
+        self.stop_monitor_button.pack(side='left', padx=5)
         
-        self.bytes_recv_label = ttk.Label(
-            stats_frame,
-            text="Bytes Received: 0 B/s",
-            font=self.fonts['text'],
-            foreground=self.colors['text'],
-            style='Custom.TLabel'
+        # Wireshark-style filter bar
+        filter_frame = ttk.Frame(controls_frame, style='Custom.TFrame')
+        filter_frame.pack(fill='x', expand=True, padx=5)
+        ttk.Label(filter_frame, text="Display Filter:", 
+                  style='Custom.TLabel').pack(side='left')
+        self.filter_entry = ttk.Entry(filter_frame, style='Custom.TEntry')
+        self.filter_entry.pack(side='left', fill='x', expand=True, padx=5)
+        self.filter_entry.insert(0, "tcp or udp or icmp")
+        
+        # Add bandwidth graph button to controls_frame
+        self.graph_button = ttk.Button(
+            controls_frame,
+            text="Show Bandwidth Graph",
+            command=self.show_bandwidth_graph,
+            style='Custom.TButton'
         )
-        self.bytes_recv_label.pack(pady=2)
+        self.graph_button.pack(side='left', padx=5)
         
-        self.connections_label = ttk.Label(
-            stats_frame,
-            text="Active Connections: 0",
-            font=self.fonts['text'],
-            foreground=self.colors['text'],
-            style='Custom.TLabel'
-        )
-        self.connections_label.pack(pady=2)
+        # Main content area with packet list and details
+        paned = ttk.PanedWindow(network_frame, orient='vertical')
+        paned.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Network traffic log
-        ttk.Label(network_frame,
-                 text="Network Traffic Log:",
-                 font=self.fonts['header'],
-                 foreground=self.colors['text'],
-                 style='Custom.TLabel').pack(pady=5)
-                 
+        # Packet list frame
+        list_frame = ttk.Frame(paned, style='Custom.TFrame')
+        columns = ('No.', 'Time', 'Source', 'Destination', 'Protocol', 'Length', 'Info')
+        self.packet_tree = ttk.Treeview(list_frame, columns=columns, show='headings',
+                                       style='Custom.Treeview')
+        
+        # Configure columns
+        widths = [70, 100, 150, 150, 100, 80, 300]
+        for col, w in zip(columns, widths):
+            self.packet_tree.heading(col, text=col)
+            self.packet_tree.column(col, width=w)
+        
+        # Add scrollbar to packet list
+        packet_scroll = ttk.Scrollbar(list_frame, orient='vertical',
+                                    command=self.packet_tree.yview)
+        self.packet_tree.configure(yscrollcommand=packet_scroll.set)
+        
+        self.packet_tree.pack(side='left', fill='both', expand=True)
+        packet_scroll.pack(side='right', fill='y')
+        paned.add(list_frame, weight=3)
+        
+        # Details pane
+        details_frame = ttk.Frame(paned, style='Custom.TFrame')
+        details_notebook = ttk.Notebook(details_frame, style='Custom.TNotebook')
+        
+        # Network log text widget - Add this section
         self.network_log = scrolledtext.ScrolledText(
-            network_frame,
+            details_notebook,
             font=self.fonts['text'],
             bg=self.colors['bg_light'],
             fg=self.colors['text'],
-            height=15,
+            height=8,
             state='disabled'
         )
-        self.network_log.pack(fill='both', expand=True, padx=10, pady=5)
+        details_notebook.add(self.network_log, text='Network Log')
+        
+        # Packet details tab
+        self.details_tree = ttk.Treeview(details_notebook, style='Custom.Treeview')
+        details_notebook.add(self.details_tree, text='Packet Details')
+        
+        # Hex dump tab
+        self.hex_view = scrolledtext.ScrolledText(
+            details_notebook,
+            font=('Courier New', 10),
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            height=8
+        )
+        details_notebook.add(self.hex_view, text='Hex Dump')
+        
+        details_notebook.pack(fill='both', expand=True)
+        paned.add(details_frame, weight=2)
+        
+        # Status bar
+        status_frame = ttk.Frame(network_frame, style='Custom.TFrame')
+        status_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.status_left = ttk.Label(
+            status_frame,
+            text="Ready to capture",
+            style='Custom.TLabel'
+        )
+        self.status_left.pack(side='left')
+        
+        self.packet_count = ttk.Label(
+            status_frame,
+            text="0 packets",
+            style='Custom.TLabel'
+        )
+        self.packet_count.pack(side='right')
+        
+        # Protocol colors
+        self.setup_protocol_colors()
+        
+        # Initialize packet counter
+        self.packet_counter = 0
 
-    def toggle_network_monitoring(self):
-        """Toggle network monitoring on/off"""
-        if not self.network_monitoring:
-            self.network_monitoring = True
-            self.monitor_button.config(text="Stop Monitoring")
-            threading.Thread(target=self.monitor_network, daemon=True).start()
-        else:
-            self.network_monitoring = False
-            self.monitor_button.config(text="Start Monitoring")
+    def setup_protocol_colors(self):
+        """Setup protocol-based colors for packet list"""
+        self.protocol_colors = {
+            'TCP': '#65B1DD',   # Light blue
+            'UDP': '#72B356',   # Light green
+            'ICMP': '#CDB356',  # Light yellow
+            'DNS': '#B38F56',   # Light brown
+            'HTTP': '#B35670',  # Light red
+            'HTTPS': '#8856B3', # Light purple
+            'ARP': '#56B3B3'    # Light cyan
+        }
+        
+        # Configure tags for each protocol
+        for proto, color in self.protocol_colors.items():
+            self.packet_tree.tag_configure(proto, foreground=color)
 
-    def monitor_network(self):
-        """Monitor network traffic and update display"""
-        last_bytes_sent = psutil.net_io_counters().bytes_sent
-        last_bytes_recv = psutil.net_io_counters().bytes_recv
+    def start_monitoring(self):
+        if not self.monitoring_active:
+            self.monitoring_active = True
+            self.start_monitor_button.config(state=tk.DISABLED)
+            self.stop_monitor_button.config(state=tk.NORMAL)
+            threading.Thread(target=self.start_packet_capture, daemon=True).start()
+            threading.Thread(target=self.monitor_bandwidth, daemon=True).start()
+            self.log_network("Network monitoring started...")
+
+    def stop_monitoring(self):
+        if self.monitoring_active:
+            self.monitoring_active = False
+            self.start_monitor_button.config(state=tk.NORMAL)
+            self.stop_monitor_button.config(state=tk.DISABLED)
+            self.log_network("Network monitoring stopped...")
+
+    def start_packet_capture(self):
+        def packet_callback(packet):
+            if not self.monitoring_active:
+                return
+            if packet.haslayer(scapy.IP):
+                # Filter out broadcast traffic
+                if packet[scapy.IP].dst != "255.255.255.255":  # Add this condition
+                    # Add delay to prevent overwhelming the display
+                    time.sleep(0.1)  # 100ms delay between packets
+                    self.packet_stats[packet[scapy.IP].src] += 1
+                    self.analyze_packet(packet)
+                    self.log_network(f"Packet captured: {packet.summary()}")  # Log packet summary
+        
+        try:
+            self.log_network("Starting packet capture...")
+            # Modified filter to exclude broadcast
+            packet_filter = "ip and (tcp or udp or icmp) and not dst host 255.255.255.255"
+            scapy.sniff(prn=packet_callback, 
+                       store=False, 
+                       iface=conf.iface, 
+                       filter=packet_filter,
+                       lfilter=lambda p: p.haslayer(scapy.IP))
+        except Exception as e:
+            self.log_network(f"Packet capture error: {str(e)}")
+
+    def analyze_packet(self, packet):
+        """Analyze captured packet and update all displays"""
+        try:
+            # Basic packet info
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            src_ip = packet[scapy.IP].src
+            dst_ip = packet[scapy.IP].dst
+            proto = packet[scapy.IP].proto
+            length = len(packet)
+            
+            # Determine protocol name
+            if packet.haslayer(scapy.TCP):
+                protocol = "TCP"
+                sport = packet[scapy.TCP].sport
+                dport = packet[scapy.TCP].dport
+                info = f"TCP {sport} → {dport}"
+            elif packet.haslayer(scapy.UDP):
+                protocol = "UDP"
+                sport = packet[scapy.UDP].sport
+                dport = packet[scapy.UDP].dport
+                info = f"UDP {sport} → {dport}"
+            elif packet.haslayer(scapy.ICMP):
+                protocol = "ICMP"
+                info = "ICMP " + str(packet[scapy.ICMP].type)
+            else:
+                protocol = "Other"
+                info = "Unknown Protocol"
+
+            # Update packet tree
+            self.root.after(0, self._update_packet_tree,
+                           self.packet_counter, timestamp, src_ip, dst_ip,
+                           protocol, length, info)
+
+            # Update packet details
+            details = self._get_packet_details(packet)
+            self.root.after(0, self._update_packet_details, details)
+
+            # Update hex view
+            hex_dump = self._get_hex_dump(packet)
+            self.root.after(0, self._update_hex_view, hex_dump)
+
+            self.packet_counter += 1
+            self.root.after(0, self._update_packet_count)
+
+        except Exception as e:
+            self.log_network(f"Error analyzing packet: {str(e)}")
+
+    def _update_packet_tree(self, counter, timestamp, src, dst, proto, length, info):
+        """Update packet list tree view"""
+        try:
+            item = self.packet_tree.insert('', 'end',
+                values=(counter, timestamp, src, dst, proto, length, info))
+            if proto in self.protocol_colors:
+                self.packet_tree.item(item, tags=(proto,))
+            self.packet_tree.see(item)
+        except Exception as e:
+            self.log_network(f"Error updating packet tree: {str(e)}")
+
+    def _get_packet_details(self, packet):
+        """Extract detailed packet information"""
+        details = []
+        
+        # Frame info
+        details.append(("Frame", "", ""))
+        details.append(("", "Length", len(packet)))
+        
+        # IP Layer
+        if packet.haslayer(scapy.IP):
+            ip = packet[scapy.IP]
+            details.append(("Internet Protocol", "", ""))
+            details.append(("", "Version", ip.version))
+            details.append(("", "Source", ip.src))
+            details.append(("", "Destination", ip.dst))
+            details.append(("", "Protocol", ip.proto))
+            details.append(("", "TTL", ip.ttl))
+        
+        # TCP/UDP Layer
+        if packet.haslayer(scapy.TCP):
+            tcp = packet[scapy.TCP]
+            details.append(("Transmission Control Protocol", "", ""))
+            details.append(("", "Source Port", tcp.sport))
+            details.append(("", "Destination Port", tcp.dport))
+            details.append(("", "Sequence", tcp.seq))
+            details.append(("", "Flags", tcp.flags))
+        elif packet.haslayer(scapy.UDP):
+            udp = packet[scapy.UDP]
+            details.append(("User Datagram Protocol", "", ""))
+            details.append(("", "Source Port", udp.sport))
+            details.append(("", "Destination Port", udp.dport))
+            details.append(("", "Length", udp.len))
+        
+        return details
+
+    def _update_packet_details(self, details):
+        """Update packet details tree"""
+        try:
+            self.details_tree.delete(*self.details_tree.get_children())
+            parent = ""
+            for detail in details:
+                if detail[0] and not detail[1]:  # Main category
+                    parent = self.details_tree.insert('', 'end', text=detail[0])
+                else:  # Sub-item
+                    self.details_tree.insert(parent, 'end',
+                        values=(detail[1], detail[2]))
+        except Exception as e:
+            self.log_network(f"Error updating details tree: {str(e)}")
+
+    def _get_hex_dump(self, packet):
+        """Generate hex dump of packet"""
+        try:
+            raw_bytes = bytes(packet)
+            hex_dump = ""
+            addr = 0
+            while addr < len(raw_bytes):
+                line_bytes = raw_bytes[addr:addr + 16]
+                hex_part = ' '.join(f'{b:02x}' for b in line_bytes)
+                ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.'
+                                   for b in line_bytes)
+                hex_dump += f"{addr:04x}  {hex_part:<48}  |{ascii_part}|\n"
+                addr += 16
+            return hex_dump
+        except Exception as e:
+            return f"Error generating hex dump: {str(e)}"
+
+    def _update_hex_view(self, hex_dump):
+        """Update hex dump view"""
+        try:
+            self.hex_view.delete(1.0, tk.END)
+            self.hex_view.insert(tk.END, hex_dump)
+        except Exception as e:
+            self.log_network(f"Error updating hex view: {str(e)}")
+
+    def _update_packet_count(self):
+        """Update packet counter in status bar"""
+        try:
+            self.packet_count.config(text=f"{self.packet_counter} packets")
+        except Exception as e:
+            self.log_network(f"Error updating packet count: {str(e)}")
+
+    def monitor_bandwidth(self):
+        """Monitor bandwidth with controlled update rate"""
+        self.bandwidth_history = []
+        last_io = psutil.net_io_counters()
         last_time = time.time()
         
-        while self.network_monitoring:
+        while self.monitoring_active:
             try:
-                # Get current network stats
+                # Wait for 1 second between measurements
+                time.sleep(1)
+                
                 current_time = time.time()
-                current_bytes_sent = psutil.net_io_counters().bytes_sent
-                current_bytes_recv = psutil.net_io_counters().bytes_recv
+                current_io = psutil.net_io_counters()
                 
-                # Calculate rates
+                # Calculate bandwidth in Mbps
                 time_delta = current_time - last_time
-                bytes_sent_rate = (current_bytes_sent - last_bytes_sent) / time_delta
-                bytes_recv_rate = (current_bytes_recv - last_bytes_recv) / time_delta
+                bytes_sent_delta = current_io.bytes_sent - last_io.bytes_sent
+                bytes_recv_delta = current_io.bytes_recv - last_io.bytes_recv
                 
-                # Get connection count
-                connections = len(psutil.net_connections())
+                bandwidth = ((bytes_sent_delta + bytes_recv_delta) * 8) / (time_delta * 1_000_000)
                 
-                # Update labels
-                self.root.after(0, self.update_network_labels,
-                              bytes_sent_rate, bytes_recv_rate, connections)
+                self.bandwidth_history.append(bandwidth)
+                # Keep only last 60 seconds of data
+                if len(self.bandwidth_history) > 60:
+                    self.bandwidth_history.pop(0)
                 
-                # Log detailed network activity
-                self.log_network_activity(
-                    f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
-                    f"Received: {self.format_bytes(bytes_recv_rate)}/s, "
-                    f"Connections: {connections}"
-                )
+                if bandwidth > self.alert_thresholds['bandwidth_mbps']:
+                    self.log_network(f"⚠️ High bandwidth: {bandwidth:.2f} Mbps")
                 
-                # Log suspicious activity (high data rates)
-                if bytes_sent_rate > 1000000 or bytes_recv_rate > 1000000:  # 1 MB/s threshold
-                    self.log_network_activity(
-                        f"High data transfer rate detected! "
-                        f"Sent: {self.format_bytes(bytes_sent_rate)}/s, "
-                        f"Received: {self.format_bytes(bytes_recv_rate)}/s"
-                    )
-                
-                # Update last values
-                last_bytes_sent = current_bytes_sent
-                last_bytes_recv = current_bytes_recv
+                last_io = current_io
                 last_time = current_time
                 
-                time.sleep(1)  # Update every second
-                
             except Exception as e:
-                self.log_network_activity(f"Error monitoring network: {str(e)}")
-                break
+                self.log_network(f"Bandwidth monitoring error: {str(e)}")
+                time.sleep(1)
 
-    def update_network_labels(self, sent_rate, recv_rate, connections):
-        """Update network statistics labels"""
-        self.bytes_sent_label.config(text=f"Bytes Sent: {self.format_bytes(sent_rate)}/s")
-        self.bytes_recv_label.config(text=f"Bytes Received: {self.format_bytes(recv_rate)}/s")
-        self.connections_label.config(text=f"Active Connections: {connections}")
+    def show_bandwidth_graph(self):
+        if len(self.bandwidth_history) > 0:
+            plt.figure(facecolor='#1E1E1E', figsize=(10, 6))
+            plt.style.use('dark_background')
+            
+            # Plot bandwidth
+            timestamps = list(range(len(self.bandwidth_history)))
+            plt.plot(timestamps, self.bandwidth_history, color='#00FF00', label='Bandwidth')
+            
+            # Add baseline and threshold indicators
+            baseline = np.mean(self.bandwidth_history)
+            std_dev = np.std(self.bandwidth_history)
+            plt.axhline(y=baseline, color='#FFFF00', linestyle='--', label='Baseline')
+            plt.axhline(y=baseline + 2*std_dev, color='#FF4444', linestyle='--', label='Alert Threshold')
+            
+            # Highlight anomalies
+            anomalies = [x for i, x in enumerate(self.bandwidth_history) if x > baseline + 2*std_dev]
+            if anomalies:
+                plt.scatter([i for i, x in enumerate(self.bandwidth_history) if x > baseline + 2*std_dev],
+                        anomalies, color='#FF0000', s=50, label='Anomalies')
+            
+            plt.title('Network Bandwidth Analysis')
+            plt.xlabel('Time (seconds)')
+            plt.ylabel('Bandwidth (Mbps)')
+            plt.legend()
+            plt.grid(True, alpha=0.2)
+            plt.show()
+        
+        else:
+                messagebox.showinfo("No Data", "Start monitoring to collect bandwidth data")
 
-    def log_network_activity(self, message: str):
-        """Add message to network log"""
+    def log_network(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.network_log.config(state='normal')
         self.network_log.insert(tk.END, f"[{timestamp}] {message}\n")
         self.network_log.see(tk.END)
         self.network_log.config(state='disabled')
 
-    def format_bytes(self, bytes: float) -> str:
-        """Format bytes into human-readable format"""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if bytes < 1024:
-                return f"{bytes:.2f} {unit}"
-            bytes /= 1024
-        return f"{bytes:.2f} TB"
+    def setup_network_interface(self):
+        """Setup and select the appropriate network interface for packet capturing"""
+        interfaces = scapy.get_if_list()
+        print("Available network interfaces:")
+        for i, iface in enumerate(interfaces):
+            print(f"{i}: {iface}")
+        
+        selected_iface = interfaces[0]
+        conf.iface = selected_iface
+        print(f"Selected network interface: {selected_iface}")
+        self.log_network(f"Selected network interface: {selected_iface}")
 
-    def create_password_analyzer_tab(self):
-        """Create password strength analyzer interface"""
-        password_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
-        self.notebook.add(password_frame, text='Password Analyzer')
-        
-        # Password input
-        input_frame = ttk.Frame(password_frame, style='Custom.TFrame')
-        input_frame.pack(fill='x', padx=10, pady=5)
-        
-        ttk.Label(input_frame,
-                 text="Enter Password:",
-                 font=self.fonts['header'],
-                 foreground=self.colors['text'],
-                 style='Custom.TLabel').pack(side='left', padx=5)
-                 
-        self.password_input = ttk.Entry(
-            input_frame,
-            font=self.fonts['text'],
-            style='Custom.TEntry',
-            # show='•'  # Mask password
-        )
-        self.password_input.pack(side='left', padx=5, fill='x', expand=True)
-        
-        # Analysis controls
-        control_frame = ttk.Frame(password_frame, style='Custom.TFrame')
-        control_frame.pack(fill='x', padx=10, pady=5)
-        
-        ttk.Button(
-            control_frame,
-            text="Analyze Password",
-            command=self.analyze_password,
-            style='Custom.TButton'
-        ).pack(side='left', padx=5)
-        
-        ttk.Button(
-            control_frame,
-            text="Generate Strong Password",
-            command=self.generate_password,
-            style='Custom.TButton'
-        ).pack(side='left', padx=5)
-        
-        # Results display
-        self.password_output = scrolledtext.ScrolledText(
-            password_frame,
-            font=self.fonts['text'],
-            bg=self.colors['bg_light'],
-            fg=self.colors['text'],
-            height=15,
-            state='disabled'
-        )
-        self.password_output.pack(fill='both', expand=True, padx=10, pady=5)
-
-    def analyze_password(self):
-        """Analyze password strength"""
-        password = self.password_input.get()
-        
-        if not password:
-            messagebox.showerror("Error", "Please enter a password")
-            return
-            
-        # Calculate strength metrics
-        length_score = min(len(password) / self.password_requirements['length'], 1.0)
-        has_upper = any(c.isupper() for c in password)
-        has_lower = any(c.islower() for c in password)
-        has_digit = any(c.isdigit() for c in password)
-        has_special = any(not c.isalnum() for c in password)
-        
-        # Calculate entropy
-        charset_size = 0
-        if has_upper: charset_size += 26
-        if has_lower: charset_size += 26
-        if has_digit: charset_size += 10
-        if has_special: charset_size += 32
-        entropy = len(password) * (charset_size.bit_length() if charset_size > 0 else 0)
-        
-        # Check common patterns
-        patterns = [
-            (r'\d{4}', "Contains 4-digit sequence"),
-            (r'(?i)password', "Contains 'password'"),
-            (r'(?i)admin', "Contains 'admin'"),
-            (r'(.)\1{2,}', "Contains repeated characters"),
-            (r'(?i)qwerty', "Contains 'qwerty'"),
-            (r'12345', "Contains '12345'")
-        ]
-        
-        found_patterns = []
-        for pattern, msg in patterns:
-            if re.search(pattern, password):
-                found_patterns.append(msg)
-        
-        # Calculate overall strength (0-100)
-        strength = (
-            length_score * 30 +
-            has_upper * 15 +
-            has_lower * 15 +
-            has_digit * 20 +
-            has_special * 20
-        )
-        strength = max(0, strength - (len(found_patterns) * 10))
-        
-        # Display results
-        self.password_output.config(state='normal')
-        self.password_output.delete(1.0, tk.END)
-        
-        self.password_output.insert(tk.END, f"Password Strength Analysis:\n\n")
-        self.password_output.insert(tk.END, f"Overall Strength: {strength:.0f}/100\n")
-        self.password_output.insert(tk.END, f"Entropy: {entropy} bits\n\n")
-        
-        self.password_output.insert(tk.END, "Requirements Met:\n")
-        self.password_output.insert(tk.END, f"✓ Length ({len(password)}/{self.password_requirements['length']})\n" if length_score >= 1 else f"✗ Length ({len(password)}/{self.password_requirements['length']})\n")
-        self.password_output.insert(tk.END, "✓ Uppercase\n" if has_upper else "✗ Uppercase\n")
-        self.password_output.insert(tk.END, "✓ Lowercase\n" if has_lower else "✗ Lowercase\n")
-        self.password_output.insert(tk.END, "✓ Numbers\n" if has_digit else "✗ Numbers\n")
-        self.password_output.insert(tk.END, "✓ Special Characters\n" if has_special else "✗ Special Characters\n")
-        
-        
-        if found_patterns:
-            self.password_output.insert(tk.END, "\nWarnings:\n")
-            for pattern in found_patterns:
-                self.password_output.insert(tk.END, f"! {pattern}\n")
-        
-        # Hash information
-        self.password_output.insert(tk.END, "\nPassword Hashes:\n")
-        self.password_output.insert(tk.END, f"MD5: {hashlib.md5(password.encode()).hexdigest()}\n")
-        self.password_output.insert(tk.END, f"SHA-256: {hashlib.sha256(password.encode()).hexdigest()}\n")
-        
-        self.password_output.insert(tk.END, f"\nPassword: {password}\n")
-        
-        self.password_output.config(state='disabled')
-
-    def generate_password(self):
-        """Generate a strong password"""
-        length = self.password_requirements['length']
-        
-        # Character sets
-        uppercase = string.ascii_uppercase
-        lowercase = string.ascii_lowercase
-        digits = string.digits
-        special = "!@#$%^&*()_+-=[]{}|;:,.<>?"
-        
-        # Ensure at least one character from each set
-        password = [
-            random.choice(uppercase),
-            random.choice(lowercase),
-            random.choice(digits),
-            random.choice(special)
-        ]
-        
-        # Fill remaining length with random characters
-        all_chars = uppercase + lowercase + digits + special
-        for _ in range(length - len(password)):
-            password.append(random.choice(all_chars))
-            
-        # Shuffle password
-        random.shuffle(password)
-        password = ''.join(password)
-        
-        # Update input field
-        self.password_input.delete(0, tk.END)
-        self.password_input.insert(0, password)
-        
-        # Analyze the generated password
-        self.analyze_password()
-
-    def create_output_display(self, parent, state='normal'):
-        """Create scrolled text widget for output"""
-        output = scrolledtext.ScrolledText(
-            parent,
-            font=self.fonts['text'],
-            bg=self.colors['bg_light'],
-            fg=self.colors['text'],
-            insertbackground=self.colors['text'],
-            height=15,
-            state=state  # Make read-only by default
-        )
-        output.pack(fill='both', expand=True, padx=10, pady=5)
-        return output
 def main():
     root = tk.Tk()
     app = SecuritySuiteApp(root)
