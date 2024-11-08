@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, font, messagebox
+from tkinter import ttk, scrolledtext, font, messagebox, filedialog
 import threading
 import socket
 import queue
@@ -26,11 +26,21 @@ import nmap
 import numpy as np
 import matplotlib.pyplot as plt
 from scapy.config import conf
+from cryptography.fernet import Fernet
+from base64 import b64encode, b64decode
+import json
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+import zlib
+import os
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import base64
 
 
 class SecuritySuiteApp:
     def __init__(self, root):
         self.root = root
+        self.init_cipher()
         self.root.title("Advanced Security Analysis Suite")
         self.root.geometry("1000x700")
         
@@ -92,6 +102,8 @@ class SecuritySuiteApp:
         conf.use_pcap = True  # Uses Npcap for packet capturing
         self.simulate_traffic = False  # Add a flag for traffic simulation
         self.monitoring_active = False  # Ensure monitoring flag is initialized
+        self.encryption_key = None
+        self.fernet = None
 
     def setup_variables(self):
         """Initialize all application variables"""
@@ -200,6 +212,8 @@ class SecuritySuiteApp:
         self.create_email_analyzer_tab()
         self.create_url_analyzer_tab()
         self.create_password_analyzer_tab()
+        self.create_cipher_tab()  # Add new tab
+        self.create_encryption_tab()  # Add new tab
 
     def create_labeled_entry(self, parent, label_text, variable, placeholder=""):
         """Create a labeled entry widget"""
@@ -218,7 +232,7 @@ class SecuritySuiteApp:
                          style='Custom.TEntry')
         entry.pack(side='left', padx=5, fill='x', expand=True)
         
-        if placeholder:
+        if (placeholder):
             entry.insert(0, placeholder)
             entry.bind('<FocusIn>', lambda e: entry.delete(0, 'end') if entry.get() == placeholder else None)
             entry.bind('<FocusOut>', lambda e: entry.insert(0, placeholder) if entry.get() == "" else None)
@@ -1240,6 +1254,24 @@ These indicators together suggest this is a phishing attempt designed to steal l
         network_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
         self.notebook.add(network_frame, text='Network Monitor')
         
+        # Add encryption key controls at the top
+        encryption_frame = ttk.Frame(network_frame, style='Custom.TFrame')
+        encryption_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(encryption_frame, 
+                 text="Encryption Key:",
+                 style='Custom.TLabel').pack(side='left', padx=5)
+        
+        self.network_key_entry = ttk.Entry(encryption_frame,
+                                         style='Custom.TEntry',
+                                         show='*')  # Hide key
+        self.network_key_entry.pack(side='left', padx=5, fill='x', expand=True)
+        
+        ttk.Button(encryption_frame,
+                  text="Set Key",
+                  command=self.set_encryption_key,
+                  style='Custom.TButton').pack(side='left', padx=5)
+        
         # Control buttons with consistent styling
         controls_frame = ttk.Frame(network_frame, style='Custom.TFrame')
         controls_frame.pack(fill='x', padx=10, pady=5)
@@ -1270,15 +1302,6 @@ These indicators together suggest this is a phishing attempt designed to steal l
         self.filter_entry.pack(side='left', fill='x', expand=True, padx=5)
         self.filter_entry.insert(0, "tcp or udp or icmp")
         
-        # Add bandwidth graph button to controls_frame
-        self.graph_button = ttk.Button(
-            controls_frame,
-            text="Show Bandwidth Graph",
-            command=self.show_bandwidth_graph,
-            style='Custom.TButton'
-        )
-        self.graph_button.pack(side='left', padx=5)
-        
         # Main content area with packet list and details
         paned = ttk.PanedWindow(network_frame, orient='vertical')
         paned.pack(fill='both', expand=True, padx=10, pady=5)
@@ -1290,7 +1313,7 @@ These indicators together suggest this is a phishing attempt designed to steal l
                                        style='Custom.Treeview')
         
         # Configure columns
-        widths = [70, 100, 150, 150, 100, 80, 300]
+        widths = [70, 100, 100, 100, 100, 80, 300]
         for col, w in zip(columns, widths):
             self.packet_tree.heading(col, text=col)
             self.packet_tree.column(col, width=w)
@@ -1353,6 +1376,18 @@ These indicators together suggest this is a phishing attempt designed to steal l
             style='Custom.TLabel'
         )
         self.packet_count.pack(side='right')
+        
+        # Add bandwidth graph button at the bottom
+        graph_frame = ttk.Frame(network_frame, style='Custom.TFrame')
+        graph_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.graph_button = ttk.Button(
+            graph_frame,
+            text="Show Bandwidth Graph",
+            command=self.show_bandwidth_graph,
+            style='Custom.TButton'
+        )
+        self.graph_button.pack(padx=15, pady=1) 
         
         # Protocol colors
         self.setup_protocol_colors()
@@ -1418,7 +1453,7 @@ These indicators together suggest this is a phishing attempt designed to steal l
             self.log_network(f"Packet capture error: {str(e)}")
 
     def analyze_packet(self, packet):
-        """Analyze captured packet and update all displays"""
+        """Analyze captured packet and update all displays with encryption"""
         try:
             # Basic packet info
             timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1427,35 +1462,61 @@ These indicators together suggest this is a phishing attempt designed to steal l
             proto = packet[scapy.IP].proto
             length = len(packet)
             
-            # Determine protocol name
+            # Create packet data dictionary
+            packet_data = {
+                'timestamp': timestamp,
+                'src_ip': src_ip,
+                'dst_ip': dst_ip,
+                'protocol': proto,
+                'length': length,
+                'raw_data': bytes(packet).hex()  # Convert packet to hex
+            }
+            
+            # Encrypt packet data if key is set
+            if self.fernet:
+                # Convert packet data to JSON and encrypt
+                json_data = json.dumps(packet_data)
+                encrypted_data = self.fernet.encrypt(json_data.encode())
+                
+                # Store encrypted data with packet
+                packet_data['encrypted'] = True
+                packet_data['secure_data'] = encrypted_data.decode()
+            else:
+                packet_data['encrypted'] = False
+            
+            # Determine protocol name and info
             if packet.haslayer(scapy.TCP):
                 protocol = "TCP"
                 sport = packet[scapy.TCP].sport
                 dport = packet[scapy.TCP].dport
-                info = f"TCP {sport} → {dport}"
+                info = f"TCP {sport} → {dport}" + (" [Encrypted]" if self.fernet else "")
             elif packet.haslayer(scapy.UDP):
                 protocol = "UDP"
                 sport = packet[scapy.UDP].sport
                 dport = packet[scapy.UDP].dport
-                info = f"UDP {sport} → {dport}"
+                info = f"UDP {sport} → {dport}" + (" [Encrypted]" if self.fernet else "")
             elif packet.haslayer(scapy.ICMP):
                 protocol = "ICMP"
-                info = "ICMP " + str(packet[scapy.ICMP].type)
+                info = "ICMP " + str(packet[scapy.ICMP].type) + (" [Encrypted]" if self.fernet else "")
             else:
                 protocol = "Other"
-                info = "Unknown Protocol"
+                info = "Unknown Protocol" + (" [Encrypted]" if self.fernet else "")
 
-            # Update packet tree
+            # Update packet tree with encryption status
             self.root.after(0, self._update_packet_tree,
                            self.packet_counter, timestamp, src_ip, dst_ip,
                            protocol, length, info)
 
-            # Update packet details
-            details = self._get_packet_details(packet)
+            # Update packet details with encryption
+            if self.fernet:
+                details = self._decrypt_packet_details(packet_data)
+            else:
+                details = self._get_packet_details(packet)
+            
             self.root.after(0, self._update_packet_details, details)
 
-            # Update hex view
-            hex_dump = self._get_hex_dump(packet)
+            # Update hex view with encryption status
+            hex_dump = self._get_encrypted_hex_dump(packet_data) if self.fernet else self._get_hex_dump(packet)
             self.root.after(0, self._update_hex_view, hex_dump)
 
             self.packet_counter += 1
@@ -1464,16 +1525,42 @@ These indicators together suggest this is a phishing attempt designed to steal l
         except Exception as e:
             self.log_network(f"Error analyzing packet: {str(e)}")
 
-    def _update_packet_tree(self, counter, timestamp, src, dst, proto, length, info):
-        """Update packet list tree view"""
+    def _decrypt_packet_details(self, packet_data):
+        """Decrypt and format packet details"""
         try:
-            item = self.packet_tree.insert('', 'end',
-                values=(counter, timestamp, src, dst, proto, length, info))
-            if proto in self.protocol_colors:
-                self.packet_tree.item(item, tags=(proto,))
-            self.packet_tree.see(item)
+            if packet_data['encrypted'] and self.fernet:
+                # Decrypt the secure data
+                decrypted_json = self.fernet.decrypt(packet_data['secure_data'].encode())
+                decrypted_data = json.loads(decrypted_json)
+                
+                details = [
+                    ("Encrypted Packet Data", "", ""),
+                    ("", "Timestamp", decrypted_data['timestamp']),
+                    ("", "Source IP", decrypted_data['src_ip']),
+                    ("", "Destination IP", decrypted_data['dst_ip']),
+                    ("", "Protocol", decrypted_data['protocol']),
+                    ("", "Length", decrypted_data['length']),
+                    ("Security", "", ""),
+                    ("", "Encryption", "Enabled"),
+                    ("", "Key Hash", hashlib.sha256(self.encryption_key).hexdigest()[:8])
+                ]
+                return details
+            else:
+                return [("Error", "", "Unable to decrypt packet data")]
         except Exception as e:
-            self.log_network(f"Error updating packet tree: {str(e)}")
+            return [("Error", "", f"Decryption failed: {str(e)}")]
+
+    def _get_encrypted_hex_dump(self, packet_data):
+        """Generate hex dump with encryption status"""
+        try:
+            if packet_data['encrypted'] and self.fernet:
+                header = "=== ENCRYPTED PACKET DATA ===\n"
+                footer = "\n=== END ENCRYPTED DATA ===\n"
+                return header + packet_data['secure_data'] + footer
+            else:
+                return "Encryption key not set - raw data display disabled"
+        except Exception as e:
+            return f"Error generating encrypted hex dump: {str(e)}"
 
     def _get_packet_details(self, packet):
         """Extract detailed packet information"""
@@ -1548,6 +1635,36 @@ These indicators together suggest this is a phishing attempt designed to steal l
             self.hex_view.insert(tk.END, hex_dump)
         except Exception as e:
             self.log_network(f"Error updating hex view: {str(e)}")
+
+    def _update_packet_tree(self, counter, timestamp, src_ip, dst_ip, protocol, length, info):
+        """Update packet list tree with new packet information"""
+        try:
+            # Create unique identifier for the packet
+            item_id = f"packet_{counter}"
+            
+            # Insert new packet into tree
+            self.packet_tree.insert(
+                '',
+                'end',
+                iid=item_id,
+                values=(counter, timestamp, src_ip, dst_ip, protocol, length, info),
+                tags=(protocol,)  # Apply protocol-based color tag
+            )
+            
+            # Auto-scroll to latest packet
+            self.packet_tree.see(item_id)
+            
+            # Update status
+            self.status_left.config(
+                text=f"Last packet: {protocol} {src_ip} → {dst_ip}"
+            )
+            
+            # Check for suspicious activity
+            if any(port in info for port in map(str, self.alert_thresholds['suspicious_ports'])):
+                self.log_network(f"⚠️ Suspicious port detected: {info}")
+                
+        except Exception as e:
+            self.log_network(f"Error updating packet tree: {str(e)}")
 
     def _update_packet_count(self):
         """Update packet counter in status bar"""
@@ -1641,6 +1758,655 @@ These indicators together suggest this is a phishing attempt designed to steal l
         conf.iface = selected_iface
         print(f"Selected network interface: {selected_iface}")
         self.log_network(f"Selected network interface: {selected_iface}")
+
+    def create_cipher_tab(self):
+        """Create advanced cryptography interface"""
+        cipher_frame = ttk.Frame(self.notebook, style='Custom.TFrame')
+        self.notebook.add(cipher_frame, text='Advanced Cipher')
+        
+        # Encryption key input
+        key_frame = ttk.Frame(cipher_frame, style='Custom.TFrame')
+        key_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(key_frame, 
+                 text="Encryption Key:",
+                 font=self.fonts['header'],
+                 style='Custom.TLabel').pack(side='left', padx=5)
+        
+        self.key_entry = ttk.Entry(key_frame,
+                                 font=self.fonts['text'],
+                                 style='Custom.TEntry',
+                                 width=30)
+        self.key_entry.pack(side='left', padx=5)
+        
+        # Add random key generator button
+        ttk.Button(key_frame,
+                  text="Generate Key",
+                  command=self.generate_random_key,
+                  style='Custom.TButton').pack(side='left', padx=5)
+        
+        # Encryption rounds
+        rounds_frame = ttk.Frame(cipher_frame, style='Custom.TFrame')
+        rounds_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(rounds_frame,
+                 text="Encryption Rounds (1-5):",
+                 font=self.fonts['header'],
+                 style='Custom.TLabel').pack(side='left', padx=5)
+        
+        self.rounds_spinbox = ttk.Spinbox(rounds_frame,
+                                        from_=1, to=5, width=5,
+                                        style='Custom.TEntry')
+        self.rounds_spinbox.set(3)
+        self.rounds_spinbox.pack(side='left', padx=5)
+        
+        # Input area
+        input_frame = ttk.Frame(cipher_frame, style='Custom.TFrame')
+        input_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        ttk.Label(input_frame,
+                 text="Input Text:",
+                 font=self.fonts['header'],
+                 style='Custom.TLabel').pack(anchor='w')
+                 
+        self.cipher_input = scrolledtext.ScrolledText(
+            input_frame,
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            height=6
+        )
+        self.cipher_input.pack(fill='both', expand=True)
+        
+        # Control buttons
+        button_frame = ttk.Frame(cipher_frame, style='Custom.TFrame')
+        button_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Button(button_frame,
+                  text="Encrypt",
+                  command=self.encrypt_text,
+                  style='Custom.TButton').pack(side='left', padx=5)
+                  
+        ttk.Button(button_frame,
+                  text="Decrypt",
+                  command=self.decrypt_text,
+                  style='Custom.TButton').pack(side='left', padx=5)
+                  
+        ttk.Button(button_frame,
+                  text="Clear",
+                  command=self.clear_cipher,
+                  style='Custom.TButton').pack(side='left', padx=5)
+        
+        # Output area
+        output_frame = ttk.Frame(cipher_frame, style='Custom.TFrame')
+        output_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        ttk.Label(output_frame,
+                 text="Output Text:",
+                 font=self.fonts['header'],
+                 style='Custom.TLabel').pack(anchor='w')
+                 
+        self.cipher_output = scrolledtext.ScrolledText(
+            output_frame,
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            height=6,
+            state='disabled'
+        )
+        self.cipher_output.pack(fill='both', expand=True)
+
+        # Add info label about encryption
+        info_text = """
+        This advanced encryption uses multiple layers of security:
+        • Vigenère cipher with key-based shifting
+        • Custom substitution based on round number
+        • Column transposition using key-based patterns
+        • Round-specific salting
+        • Noise injection between words
+        
+        Higher rounds = more security but slower processing
+        """
+        ttk.Label(cipher_frame,
+                 text=info_text,
+                 font=self.fonts['text'],
+                 style='Custom.TLabel',
+                 justify='left').pack(pady=10)
+
+    def generate_random_key(self):
+        """Generate a random complex encryption key"""
+        # Generate a random key of length 16-32 characters
+        length = random.randint(16, 32)
+        charset = string.ascii_letters + string.digits + "!@#$%^&*"
+        key = ''.join(random.choice(charset) for _ in range(length))
+        self.key_entry.delete(0, tk.END)
+        self.key_entry.insert(0, key)
+
+    def complex_encrypt(self, text: str, key: str, rounds: int) -> str:
+        """Implement multi-layered encryption"""
+        if not text or not key:
+            return text
+            
+        # Initial preprocessing
+        result = self._add_noise(text)
+        
+        for round in range(rounds):
+            # Apply Vigenère cipher
+            result = self._vigenere_cipher(result, key, encrypt=True)
+            
+            # Apply substitution
+            result = self._substitution_cipher(result, round)
+            
+            # Apply transposition
+            result = self._transposition_cipher(result, key)
+            
+            # Add round-specific salt
+            salt = self._generate_salt(key, round)
+            result = self._add_salt(result, salt)
+        
+        return result
+
+    def complex_decrypt(self, text: str, key: str, rounds: int) -> str:
+        """Implement multi-layered decryption"""
+        if not text or not key:
+            return text
+            
+        result = text
+        
+        for round in reversed(range(rounds)):
+            # Remove round-specific salt
+            salt = self._generate_salt(key, round)
+            result = self._remove_salt(result, salt)
+            
+            # Reverse transposition
+            result = self._transposition_cipher(result, key, decrypt=True)
+            
+            # Reverse substitution
+            result = self._substitution_cipher(result, round, decrypt=True)
+            
+            # Reverse Vigenère cipher
+            result = self._vigenere_cipher(result, key, encrypt=False)
+        
+        # Remove noise
+        result = self._remove_noise(result)
+        return result
+
+    def _vigenere_cipher(self, text: str, key: str, encrypt: bool) -> str:
+        """Enhanced Vigenère cipher implementation"""
+        result = ""
+        key_length = len(key)
+        key_as_int = [ord(i) for i in key]
+        
+        for i, char in enumerate(text):
+            if char.isalpha():
+                # Determine the case and base ASCII value
+                key_shift = key_as_int[i % key_length] % 26
+                if not encrypt:
+                    key_shift = -key_shift
+                    
+                # Preserve case
+                if char.isupper():
+                    base = ord('A')
+                else:
+                    base = ord('a')
+                    
+                shifted = (ord(char) - base + key_shift) % 26
+                result += chr(base + shifted)
+            else:
+                result += char
+                
+        return result
+
+    def _substitution_cipher(self, text: str, round: int, decrypt: bool = False) -> str:
+        """Custom substitution cipher based on round number"""
+        substitution = {}
+        random.seed(round)  # Use round as seed for consistent substitution
+        
+        # Generate substitution table
+        chars = list(string.printable)
+        substituted = chars.copy()
+        random.shuffle(substituted)
+        
+        for i, char in enumerate(chars):
+            if decrypt:
+                substitution[substituted[i]] = char
+            else:
+                substitution[char] = substituted[i]
+        
+        return ''.join(substitution.get(c, c) for c in text)
+
+    def _transposition_cipher(self, text: str, key: str, decrypt: bool = False) -> str:
+        """Column transposition cipher"""
+        key_order = [sorted(enumerate(key), key=lambda x: x[1])[i][0] 
+                    for i in range(len(key))]
+        
+        # Pad text if needed
+        padding = len(key) - (len(text) % len(key)) if len(text) % len(key) != 0 else 0
+        text = text + ' ' * padding
+        
+        # Create matrix
+        matrix = [text[i:i + len(key)] for i in range(0, len(text), len(key))]
+        
+        if decrypt:
+            # Decrypt: read by columns in key order
+            result = ''
+            for row in matrix:
+                for col in key_order:
+                    if col < len(row):
+                        result += row[col]
+        else:
+            # Encrypt: write by columns in key order
+            result = ''
+            for col in key_order:
+                for row in matrix:
+                    if col < len(row):
+                        result += row[col]
+                        
+        return result.rstrip()
+
+    def _add_noise(self, text: str) -> str:
+        """Add random noise characters between words"""
+        words = text.split()
+        noise_chars = "!@#$%^&*"
+        return random.choice(noise_chars).join(words)
+
+    def _remove_noise(self, text: str) -> str:
+        """Remove noise characters"""
+        return ' '.join(text.split())
+
+    def _generate_salt(self, key: str, round: int) -> str:
+        """Generate a unique salt based on key and round"""
+        salt_base = hashlib.sha256(f"{key}{round}".encode()).hexdigest()
+        return salt_base[:8]  # Use first 8 characters as salt
+
+    def _add_salt(self, text: str, salt: str) -> str:
+        """Add salt to encrypted text"""
+        return f"{salt}{text}"
+
+    def _remove_salt(self, text: str, salt: str) -> str:
+        """Remove salt from encrypted text"""
+        if text.startswith(salt):
+            return text[len(salt):]
+        return text
+
+    def encrypt_text(self):
+        """Encrypt the input text using complex encryption"""
+        try:
+            key = self.key_entry.get().strip()
+            if not key:
+                raise ValueError("Encryption key is required")
+                
+            rounds = int(self.rounds_spinbox.get())
+            if not (1 <= rounds <= 5):
+                raise ValueError("Rounds must be between 1 and 5")
+                
+            text = self.cipher_input.get("1.0", tk.END).strip()
+            if not text:
+                messagebox.showwarning("Input Required", "Please enter text to encrypt")
+                return
+                
+            encrypted = self.complex_encrypt(text, key, rounds)
+            
+            self.cipher_output.config(state='normal')
+            self.cipher_output.delete("1.0", tk.END)
+            self.cipher_output.insert("1.0", encrypted)
+            self.cipher_output.config(state='disabled')
+            
+        except ValueError as e:
+            messagebox.showerror("Error", str(e))
+
+    def decrypt_text(self):
+        """Decrypt the input text using complex decryption"""
+        try:
+            key = self.key_entry.get().strip()
+            if not key:
+                raise ValueError("Encryption key is required")
+                
+            rounds = int(self.rounds_spinbox.get())
+            if not (1 <= rounds <= 5):
+                raise ValueError("Rounds must be between 1 and 5")
+                
+            text = self.cipher_input.get("1.0", tk.END).strip()
+            if not text:
+                messagebox.showwarning("Input Required", "Please enter text to decrypt")
+                return
+                
+            decrypted = self.complex_decrypt(text, key, rounds)
+            
+            self.cipher_output.config(state='normal')
+            self.cipher_output.delete("1.0", tk.END)
+            self.cipher_output.insert("1.0", decrypted)
+            self.cipher_output.config(state='disabled')
+            
+        except ValueError as e:
+            messagebox.showerror("Error", str(e))
+
+    def clear_cipher(self):
+        """Clear both input and output text areas"""
+        self.cipher_input.delete("1.0", tk.END)
+        self.cipher_output.config(state='normal')
+        self.cipher_output.delete("1.0", tk.END)
+        self.cipher_output.config(state='disabled')
+
+    def set_encryption_key(self):
+        """Set up encryption key for secure packet handling"""
+        key = self.network_key_entry.get().strip()
+        if not key:
+            messagebox.showerror("Error", "Please enter an encryption key")
+            return
+            
+        # Generate Fernet key from password
+        key_bytes = key.encode()
+        key_b64 = b64encode(hashlib.sha256(key_bytes).digest())
+        self.encryption_key = key_b64
+        self.fernet = Fernet(key_b64)
+        
+        messagebox.showinfo("Success", "Encryption key set successfully")
+        self.log_network("Encryption enabled for packet analysis")
+
+    def init_cipher(self):
+        """Initialize encryption components"""
+        key_file = 'security.key'
+        if not os.path.exists(key_file):
+            key = Fernet.generate_key()
+            with open(key_file, 'wb') as f:
+                f.write(key)
+        with open(key_file, 'rb') as f:
+            self.cipher = Fernet(f.read())
+
+    def encrypt_data(self, data, compress=True):
+        """Encrypt and optionally compress data"""
+        if isinstance(data, str):
+            data = data.encode()
+        if compress:
+            data = zlib.compress(data)
+        return self.cipher.encrypt(data)
+
+    def decrypt_data(self, encrypted_data, compressed=True):
+        """Decrypt and decompress data"""
+        decrypted = self.cipher.decrypt(encrypted_data)
+        if compressed:
+            decrypted = zlib.decompress(decrypted)
+        return decrypted.decode()
+
+    def secure_file_write(self, filename, data):
+        """Securely write encrypted data to file"""
+        encrypted = self.encrypt_data(data)
+        with open(filename, 'wb') as f:
+            f.write(encrypted)
+
+    def secure_file_read(self, filename):
+        """Read and decrypt file data"""
+        with open(filename, 'rb') as f:
+            encrypted = f.read()
+        return self.decrypt_data(encrypted)
+    
+    def save_network_data(self, packet_data):
+        self.secure_file_write('network_log.enc', str(packet_data))
+
+    def load_network_data(self):
+        return self.secure_file_read('network_log.enc')
+
+    def create_encryption_tab(self):
+        """Create encryption tab interface"""
+        encryption_tab = EncryptionTab(self.notebook, self.colors, self.fonts, self.style)
+        self.notebook.add(encryption_tab, text='Encryption')
+
+class EncryptionTab(ttk.Frame):
+    def __init__(self, parent, colors, fonts, style):
+        super().__init__(parent)
+        self.key = None
+        self.colors = colors
+        self.fonts = fonts
+        self.style = style
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.configure(style='Custom.TFrame')
+        
+        # Configure main grid weights
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        
+        # Text encryption section (left side)
+        self.text_frame = ttk.LabelFrame(
+            self, 
+            text="Text Encryption",
+            style='Custom.TFrame'
+        )
+        self.text_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.text_frame.grid_columnconfigure(0, weight=1)
+        
+        # More reasonable text input size
+        self.input_text = tk.Text(
+            self.text_frame,
+            height=8,  # Reduced height
+            width=40,  # Set explicit width
+            font=self.fonts['text'],
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            insertbackground=self.colors['text']
+        )
+        self.input_text.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Password controls with bigger font
+        controls_frame = ttk.Frame(self.text_frame, style='Custom.TFrame')
+        controls_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        
+        self.password_label = ttk.Label(
+            controls_frame,
+            text="Password:",
+            font=self.fonts['header'],  # Using header font for bigger text
+            style='Custom.TLabel'
+        )
+        self.password_label.pack(side='left', padx=5)
+        
+        self.password_entry = ttk.Entry(
+            controls_frame,
+            font=self.fonts['header'],  # Using header font for bigger text
+            style='Custom.TEntry',
+            show="*",
+            width=20
+        )
+        self.password_entry.pack(side='left', padx=5, fill='x', expand=True)
+        
+        # Bigger buttons
+        button_frame = ttk.Frame(self.text_frame, style='Custom.TFrame')
+        button_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        button_frame.grid_columnconfigure((0,1), weight=1)
+        
+        self.encrypt_btn = ttk.Button(
+            button_frame,
+            text="Encrypt",
+            command=self.encrypt_text,
+            style='Custom.TButton',
+            padding=(20, 10)  # Make buttons bigger
+        )
+        self.encrypt_btn.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        
+        self.decrypt_btn = ttk.Button(
+            button_frame,
+            text="Decrypt",
+            command=self.decrypt_text,
+            style='Custom.TButton',
+            padding=(20, 10)  # Make buttons bigger
+        )
+        self.decrypt_btn.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        
+        # File encryption section (right side)
+        self.file_frame = ttk.LabelFrame(
+            self,
+            text="File Encryption",
+            style='Custom.TFrame'
+        )
+        self.file_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+        self.file_frame.grid_columnconfigure(0, weight=1)
+        
+        # File selection with bigger buttons
+        select_frame = ttk.Frame(self.file_frame, style='Custom.TFrame')
+        select_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        self.select_file_btn = ttk.Button(
+            select_frame,
+            text="Select File",
+            command=self.select_file,
+            style='Custom.TButton',
+            padding=(20, 10)  # Make button bigger
+        )
+        self.select_file_btn.pack(side='left', padx=10)
+        
+        self.file_label = ttk.Label(
+            select_frame,
+            text="No file selected",
+            font=self.fonts['header'],  # Using header font for bigger text
+            style='Custom.TLabel'
+        )
+        self.file_label.pack(side='left', padx=10, fill='x', expand=True)
+        
+        # File list with reasonable size
+        self.file_list = tk.Listbox(
+            self.file_frame,
+            font=self.fonts['header'],  # Using header font for bigger text
+            bg=self.colors['bg_light'],
+            fg=self.colors['text'],
+            selectmode='single',
+            height=6  # Reduced height
+        )
+        self.file_list.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        
+        # File operation buttons
+        file_buttons_frame = ttk.Frame(self.file_frame, style='Custom.TFrame')
+        file_buttons_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        file_buttons_frame.grid_columnconfigure((0,1), weight=1)
+        
+        self.encrypt_file_btn = ttk.Button(
+            file_buttons_frame,
+            text="Encrypt File",
+            command=self.encrypt_file,
+            style='Custom.TButton',
+            padding=(20, 10)  # Make button bigger
+        )
+        self.encrypt_file_btn.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        
+        self.decrypt_file_btn = ttk.Button(
+            file_buttons_frame,
+            text="Decrypt File",
+            command=self.decrypt_file,
+            style='Custom.TButton',
+            padding=(20, 10)  # Make button bigger
+        )
+        self.decrypt_file_btn.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        
+        # Status label with bigger font
+        self.status_label = ttk.Label(
+            self.file_frame,
+            text="Ready for encryption/decryption operations",
+            font=self.fonts['header'],  # Using header font for bigger text
+            style='Custom.TLabel',
+            wraplength=300  # Wrap text if too long
+        )
+        self.status_label.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+    # ...rest of the methods remain unchanged...
+
+    def generate_key(self, password):
+        salt = b'salt_'  # In production, use random salt and store it
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+        return Fernet(key)
+
+    def encrypt_text(self):
+        try:
+            text = self.input_text.get("1.0", tk.END).strip()
+            password = self.password_entry.get()
+            if not text or not password:
+                tk.messagebox.showerror("Error", "Please enter both text and password")
+                return
+                
+            f = self.generate_key(password)
+            encrypted_text = f.encrypt(text.encode())
+            self.input_text.delete("1.0", tk.END)
+            self.input_text.insert("1.0", encrypted_text.decode())
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"Encryption failed: {str(e)}")
+
+    def decrypt_text(self):
+        try:
+            text = self.input_text.get("1.0", tk.END).strip()
+            password = self.password_entry.get()
+            if not text or not password:
+                tk.messagebox.showerror("Error", "Please enter both text and password")
+                return
+                
+            f = self.generate_key(password)
+            decrypted_text = f.decrypt(text.encode())
+            self.input_text.delete("1.0", tk.END)
+            self.input_text.insert("1.0", decrypted_text.decode())
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"Decryption failed: {str(e)}")
+
+    def select_file(self):
+        filepath = filedialog.askopenfilename()
+        if filepath:
+            self.file_label.config(text=os.path.basename(filepath))
+            self.current_file = filepath
+
+    def encrypt_file(self):
+        try:
+            if not hasattr(self, 'current_file'):
+                tk.messagebox.showerror("Error", "Please select a file first")
+                return
+                
+            password = self.password_entry.get()
+            if not password:
+                tk.messagebox.showerror("Error", "Please enter a password")
+                return
+
+            f = self.generate_key(password)
+            
+            with open(self.current_file, 'rb') as file:
+                file_data = file.read()
+            
+            encrypted_data = f.encrypt(file_data)
+            
+            with open(f"{self.current_file}.encrypted", 'wb') as file:
+                file.write(encrypted_data)
+                
+            tk.messagebox.showinfo("Success", "File encrypted successfully")
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"File encryption failed: {str(e)}")
+
+    def decrypt_file(self):
+        try:
+            if not hasattr(self, 'current_file'):
+                tk.messagebox.showerror("Error", "Please select a file first")
+                return
+                
+            password = self.password_entry.get()
+            if not password:
+                tk.messagebox.showerror("Error", "Please enter a password")
+                return
+
+            f = self.generate_key(password)
+            
+            with open(self.current_file, 'rb') as file:
+                encrypted_data = file.read()
+            
+            decrypted_data = f.decrypt(encrypted_data)
+            
+            output_file = self.current_file.replace('.encrypted', '.decrypted')
+            with open(output_file, 'wb') as file:
+                file.write(decrypted_data)
+                
+            tk.messagebox.showinfo("Success", "File decrypted successfully")
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"File decryption failed: {str(e)}")
 
 def main():
     root = tk.Tk()
