@@ -212,8 +212,7 @@ class SecuritySuiteApp:
         self.create_email_analyzer_tab()
         self.create_url_analyzer_tab()
         self.create_password_analyzer_tab()
-        self.create_cipher_tab()  # Add new tab
-        self.create_encryption_tab()  # Add new tab
+        self.create_encryption_tab()  # Keep only this encryption tab
 
     def create_labeled_entry(self, parent, label_text, variable, placeholder=""):
         """Create a labeled entry widget"""
