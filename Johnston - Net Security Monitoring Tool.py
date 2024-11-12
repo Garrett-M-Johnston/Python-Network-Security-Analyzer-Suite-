@@ -27,7 +27,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scapy.config import conf
 from cryptography.fernet import Fernet
-from base64 import b64encode, b64decode
+from base64 import b64encode
 import json
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
