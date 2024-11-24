@@ -35,6 +35,12 @@ import zlib
 import os
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
+from abc import ABC, abstractmethod
+from collections import deque
+import queue
+import tkinter as tk
+from cryptography.fernet import Fernet
+import re
 
 
 class SecuritySuiteApp:
@@ -212,7 +218,7 @@ class SecuritySuiteApp:
         self.create_email_analyzer_tab()
         self.create_url_analyzer_tab()
         self.create_password_analyzer_tab()
-        self.create_encryption_tab()  # Keep only this encryption tab
+        self.create_encryption_tab() 
 
     def create_labeled_entry(self, parent, label_text, variable, placeholder=""):
         """Create a labeled entry widget"""
@@ -433,7 +439,6 @@ class SecuritySuiteApp:
         """Enhanced display of URL analysis results"""
         self.url_output.config(state='normal')
         
-        # Configure tags for formatting
         self.url_output.tag_configure("big_bold", font=("Arial", 16, "bold"))
         self.url_output.tag_configure("url", font=("Arial", 11, "bold"))
         
@@ -468,7 +473,7 @@ class SecuritySuiteApp:
             input_frame,
             font=self.fonts['text'],
             style='Custom.TEntry',
-            # show='•'  # Mask password
+           #show='•'  # Mask password
         )
         self.password_input.pack(side='left', padx=5, fill='x', expand=True)
         
@@ -2307,10 +2312,9 @@ class EncryptionTab(ttk.Frame):
         )
         self.status_label.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
 
-    # ...rest of the methods remain unchanged...
 
     def generate_key(self, password):
-        salt = b'salt_'  # In production, use random salt and store it
+        salt = b'salt_'  
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -2406,6 +2410,39 @@ class EncryptionTab(ttk.Frame):
             tk.messagebox.showinfo("Success", "File decrypted successfully")
         except Exception as e:
             tk.messagebox.showerror("Error", f"File decryption failed: {str(e)}")
+
+class SecurityTool(ABC):
+    """Abstract base class for security tools"""
+    @abstractmethod
+    def initialize(self):
+        pass
+    
+    @abstractmethod
+    def start(self):
+        pass
+    
+    @abstractmethod
+    def stop(self):
+        pass
+
+class PortScanner(SecurityTool):
+    def __init__(self, root):
+        self.root = root
+        self.target_ip = tk.StringVar(master=root)
+        self.start_port = tk.IntVar(master=root, value=1)
+        self.end_port = tk.IntVar(master=root, value=1024)
+        self.scan_active = False
+        self.MAX_THREADS = 100
+        self.scan_threads = []
+        self.port_queue = queue.Queue()
+        self.results_queue = queue.Queue()
+
+class SecurityController:
+    def __init__(self, root):
+        self.root = root
+        self.tools = {}
+        self.encryption_key = None
+        self.fernet = None
 
 def main():
     root = tk.Tk()
