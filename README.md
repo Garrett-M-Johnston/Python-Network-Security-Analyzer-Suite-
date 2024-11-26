@@ -34,7 +34,7 @@ A Python-based desktop application for basic network monitoring and file securit
 - Python 3.8+
 - Npcap (Windows)
 - Required packages:
-- 
+  
 ## Installation
 
 1. Clone the repository
