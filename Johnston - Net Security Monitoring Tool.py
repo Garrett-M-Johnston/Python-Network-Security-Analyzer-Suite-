@@ -41,6 +41,13 @@ import queue
 import tkinter as tk
 from cryptography.fernet import Fernet
 import re
+import customtkinter as ctk
+from abc import ABC, abstractmethod
+import threading
+
+# Set theme and color scheme
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 
 class SecuritySuiteApp:
@@ -2428,14 +2435,88 @@ class SecurityTool(ABC):
 class PortScanner(SecurityTool):
     def __init__(self, root):
         self.root = root
-        self.target_ip = tk.StringVar(master=root)
-        self.start_port = tk.IntVar(master=root, value=1)
-        self.end_port = tk.IntVar(master=root, value=1024)
         self.scan_active = False
         self.MAX_THREADS = 100
-        self.scan_threads = []
-        self.port_queue = queue.Queue()
-        self.results_queue = queue.Queue()
+        
+        # Create main frame
+        self.main_frame = ctk.CTkFrame(root)
+        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title label
+        self.title_label = ctk.CTkLabel(
+            self.main_frame, 
+            text="Port Scanner",
+            font=("Roboto", 24, "bold")
+        )
+        self.title_label.pack(pady=10)
+        
+        # Target IP input
+        self.ip_frame = ctk.CTkFrame(self.main_frame)
+        self.ip_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.ip_label = ctk.CTkLabel(self.ip_frame, text="Target IP:")
+        self.ip_label.pack(side="left", padx=5)
+        
+        self.target_ip = ctk.CTkEntry(
+            self.ip_frame,
+            placeholder_text="Enter IP address..."
+        )
+        self.target_ip.pack(side="left", fill="x", expand=True, padx=5)
+        
+        # Port range frame
+        self.port_frame = ctk.CTkFrame(self.main_frame)
+        self.port_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Start port input
+        self.start_port_label = ctk.CTkLabel(self.port_frame, text="Start Port:")
+        self.start_port_label.pack(side="left", padx=5)
+        
+        self.start_port = ctk.CTkEntry(
+            self.port_frame,
+            placeholder_text="1"
+        )
+        self.start_port.pack(side="left", padx=5)
+        
+        # End port input
+        self.end_port_label = ctk.CTkLabel(self.port_frame, text="End Port:")
+        self.end_port_label.pack(side="left", padx=5)
+        
+        self.end_port = ctk.CTkEntry(
+            self.port_frame,
+            placeholder_text="1024"
+        )
+        self.end_port.pack(side="left", padx=5)
+        
+        # Progress bar
+        self.progress = ctk.CTkProgressBar(self.main_frame)
+        self.progress.pack(fill="x", padx=10, pady=10)
+        self.progress.set(0)
+        
+        # Control buttons
+        self.button_frame = ctk.CTkFrame(self.main_frame)
+        self.button_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.start_button = ctk.CTkButton(
+            self.button_frame,
+            text="Start Scan",
+            command=self.start
+        )
+        self.start_button.pack(side="left", padx=5)
+        
+        self.stop_button = ctk.CTkButton(
+            self.button_frame,
+            text="Stop Scan",
+            fg_color="red",
+            command=self.stop
+        )
+        self.stop_button.pack(side="left", padx=5)
+        
+        # Results text area
+        self.results_text = ctk.CTkTextbox(
+            self.main_frame,
+            height=200
+        )
+        self.results_text.pack(fill="both", expand=True, padx=10, pady=10)
 
 class SecurityController:
     def __init__(self, root):

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Security Monitoring Tool</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Network Security Monitoring Tool</h1>
+        <div class="section">
+            <h2>Port Scanner</h2>
+            <input type="text" id="targetIp" placeholder="Target IP">
+            <input type="number" id="startPort" placeholder="Start Port">
+            <input type="number" id="endPort" placeholder="End Port">
+            <button id="startScan">Start Scan</button>
+            <button id="stopScan">Stop Scan</button>
+        </div>
+        <div class="section">
+            <h2>URL Analyzer</h2>
+            <textarea id="urls" placeholder="Enter URLs, one per line"></textarea>
+            <button id="analyzeUrls">Analyze URLs</button>
+        </div>
+        <div class="section">
+            <h2>Email Analyzer</h2>
+            <textarea id="emailContent" placeholder="Paste email content here"></textarea>
+            <button id="analyzeEmail">Analyze Email</button>
+        </div>
+        <div class="section">
+            <h2>Password Analyzer</h2>
+            <input type="text" id="password" placeholder="Enter Password">
+            <button id="analyzePassword">Analyze Password</button>
+            <button id="generatePassword">Generate Strong Password</button>
+        </div>
+    </div>
+    <script src="Network Tool Javascript.js"></script>
+</body>
+</html>
